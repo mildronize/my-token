@@ -153,23 +153,30 @@ paths:
         rest of this response actually covers.
 
 
-        `lifetime` is a sixth value, additive to the contract's own
-        fixed five (`_contract/contract.md`'s API surface section names
-        exactly `5h|24h|today|week|month`) — flagged as a build-time
-        decision in ticket 14's own report, not silently added: the
+        `lifetime` was originally a sixth value, additive to the
+        contract's own fixed five (`_contract/contract.md`'s API surface
+        section originally named exactly `5h|24h|today|week|month`) —
+        flagged as a build-time decision in ticket 14's own report: the
         ticket's own mockup spec names a "lifetime cost" summary tile,
-        which none of the five contract windows can answer (each has a
-        bounded start). Query-string-additive only — `GET
-        /usage/windows`' own fixed table is untouched, still exactly
-        those five, in that order. `lifetime` covers every event ever
-        ingested up to now, with no left bound.
+        which none of the five original windows could answer (each has a
+        bounded start). `lifetime` covers every event ever ingested up to
+        now, with no left bound.
+
+        story-1/ticket-20 adds `year` (calendar-anchored at Jan 1 00:00
+        UTC of the current year, matching `today`/`week`/`month`'s own
+        calendar-boundary convention — not a rolling 365-day window), and
+        reopens ticket 14's "`lifetime` is query-string-additive only,
+        never in the fixed table" call: both `year` and `lifetime` are
+        now real, selectable tabs that also drive `GET /usage/windows`'
+        own fixed table (now seven rows, see that operation below), not
+        just this endpoint's own `window` query parameter.
       parameters:
         - name: window
           in: query
           required: true
           schema:
             type: string
-            enum: [5h, 24h, today, week, month, lifetime]
+            enum: [5h, 24h, today, week, month, year, lifetime]
         - name: group_by
           in: query
           required: true
@@ -190,16 +197,22 @@ paths:
   /usage/windows:
     get:
       operationId: getUsageWindows
-      summary: Turns/tokens/cost for each of the fixed 5h/24h/today/week/month windows.
+      summary: Turns/tokens/cost for each of the fixed 5h/24h/today/week/month/year/lifetime windows.
       description: >
         story-1/ticket-14: backs the console's time-window table — one
         row per fixed window, each computed the same way
         `getUsageSummary`'s own `window` parameter computes its range,
         with no `group_by` (each row is this service's whole reporting
         surface's totals for that window, not split by dimension).
+
+        story-1/ticket-20: grows from five rows to seven — `year` and
+        `lifetime` are now real, selectable tabs (reopening ticket 14's
+        "lifetime is tab-only-tile, never a tab" call), so both belong in
+        this fixed table too for consistency between what's clickable and
+        what's listed.
       responses:
         "200":
-          description: One row per fixed window, in 5h, 24h, today, week, month order.
+          description: One row per fixed window, in 5h, 24h, today, week, month, year, lifetime order.
           content:
             application/json:
               schema:
@@ -353,7 +366,7 @@ components:
       properties:
         window:
           type: string
-          enum: [5h, 24h, today, week, month]
+          enum: [5h, 24h, today, week, month, year, lifetime]
         turns:
           type: integer
           format: int64

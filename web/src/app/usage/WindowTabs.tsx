@@ -1,8 +1,10 @@
-// story-1/ticket-14: the top bar's time-window tabs — the fixed five
-// windows GET /usage/windows' own table covers (~/lib/usage.ts's
-// FIXED_WINDOWS). "lifetime" is deliberately not a tab: it only exists
-// as one summary tile's own unbounded range (SummaryTiles.tsx), not a
-// window a user picks to re-scope every panel by.
+// story-1/ticket-14: the top bar's time-window tabs — the fixed windows
+// GET /usage/windows' own table covers (~/lib/usage.ts's FIXED_WINDOWS).
+// story-1/ticket-20 reopens ticket 14's "lifetime is deliberately not a
+// tab" call: `year` and `lifetime` are now both real, selectable tabs
+// like every other window here — clicking either re-scopes the
+// actor/path/machine breakdown panels via `/usage/summary?window=...`,
+// exactly like the original five.
 import { FIXED_WINDOWS, type UsageWindow } from "~/lib/usage";
 
 const WINDOW_LABELS: Record<UsageWindow, string> = {
@@ -11,6 +13,7 @@ const WINDOW_LABELS: Record<UsageWindow, string> = {
   today: "Today",
   week: "Week",
   month: "Month",
+  year: "Year",
   lifetime: "Lifetime",
 };
 

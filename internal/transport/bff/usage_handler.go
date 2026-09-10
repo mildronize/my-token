@@ -107,7 +107,8 @@ func (s *UsageServer) GetUsageSummary(c *gin.Context, params bffapi.GetUsageSumm
 }
 
 // GetUsageWindows implements bffapi.ServerInterface —
-// GET /api/bff/usage/windows: the fixed 5h/24h/today/week/month table,
+// GET /api/bff/usage/windows: the fixed 5h/24h/today/week/month/year/
+// lifetime table (story-1/ticket-20 grew this from five to seven rows),
 // no group_by (usage.Service.Windows' own doc comment).
 func (s *UsageServer) GetUsageWindows(c *gin.Context) {
 	if _, ok := bffOwnerID(c); !ok {

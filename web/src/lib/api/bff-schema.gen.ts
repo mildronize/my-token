@@ -97,7 +97,8 @@ export interface paths {
          * Usage totals and one-dimension breakdown for a time window.
          * @description story-1/ticket-14: the console's own read surface over `usage_events` (`_rules/../story-1/_contract/contract.md`'s "API surface" section — wire field names below are copied verbatim from that contract, including its `snake_case` `group_by`/`reporting_installs`, which deliberately breaks from this surface's own camelCase convention elsewhere; not "corrected" here since the contract is this ticket's literal input, not something to reopen). `window` selects the [start, now) range (`today`/`week`/`month` are calendar-anchored at UTC midnight/Monday/1st; `5h`/`24h` are rolling); `group_by` picks which dimension the `breakdown` array is keyed by. `totals.tokens` sums all four raw token counters per event (input + output + cache_read + cache_creation) — a single display number, distinct from ticket 9's "never summed into each other" rule about the *stored* per-field columns, which this endpoint only ever reads, never rewrites. `reporting_installs` is the count of distinct `machine` values with at least one event inside the selected window (not lifetime) — the goal's partial-view caveat, scoped to what the rest of this response actually covers.
          *
-         *     `lifetime` is a sixth value, additive to the contract's own fixed five (`_contract/contract.md`'s API surface section names exactly `5h|24h|today|week|month`) — flagged as a build-time decision in ticket 14's own report, not silently added: the ticket's own mockup spec names a "lifetime cost" summary tile, which none of the five contract windows can answer (each has a bounded start). Query-string-additive only — `GET /usage/windows`' own fixed table is untouched, still exactly those five, in that order. `lifetime` covers every event ever ingested up to now, with no left bound.
+         *     `lifetime` was originally a sixth value, additive to the contract's own fixed five (`_contract/contract.md`'s API surface section originally named exactly `5h|24h|today|week|month`) — flagged as a build-time decision in ticket 14's own report: the ticket's own mockup spec names a "lifetime cost" summary tile, which none of the five original windows could answer (each has a bounded start). `lifetime` covers every event ever ingested up to now, with no left bound.
+         *     story-1/ticket-20 adds `year` (calendar-anchored at Jan 1 00:00 UTC of the current year, matching `today`/`week`/`month`'s own calendar-boundary convention — not a rolling 365-day window), and reopens ticket 14's "`lifetime` is query-string-additive only, never in the fixed table" call: both `year` and `lifetime` are now real, selectable tabs that also drive `GET /usage/windows`' own fixed table (now seven rows, see that operation below), not just this endpoint's own `window` query parameter.
          */
         get: operations["getUsageSummary"];
         put?: never;
@@ -116,8 +117,9 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Turns/tokens/cost for each of the fixed 5h/24h/today/week/month windows.
+         * Turns/tokens/cost for each of the fixed 5h/24h/today/week/month/year/lifetime windows.
          * @description story-1/ticket-14: backs the console's time-window table — one row per fixed window, each computed the same way `getUsageSummary`'s own `window` parameter computes its range, with no `group_by` (each row is this service's whole reporting surface's totals for that window, not split by dimension).
+         *     story-1/ticket-20: grows from five rows to seven — `year` and `lifetime` are now real, selectable tabs (reopening ticket 14's "lifetime is tab-only-tile, never a tab" call), so both belong in this fixed table too for consistency between what's clickable and what's listed.
          */
         get: operations["getUsageWindows"];
         put?: never;
@@ -194,7 +196,7 @@ export interface components {
         };
         UsageWindowRow: {
             /** @enum {string} */
-            window: "5h" | "24h" | "today" | "week" | "month";
+            window: "5h" | "24h" | "today" | "week" | "month" | "year" | "lifetime";
             /** Format: int64 */
             turns: number;
             /** Format: int64 */
@@ -337,7 +339,7 @@ export interface operations {
     getUsageSummary: {
         parameters: {
             query: {
-                window: "5h" | "24h" | "today" | "week" | "month" | "lifetime";
+                window: "5h" | "24h" | "today" | "week" | "month" | "year" | "lifetime";
                 group_by: "actor" | "path" | "machine";
             };
             header?: never;
@@ -368,7 +370,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description One row per fixed window, in 5h, 24h, today, week, month order. */
+            /** @description One row per fixed window, in 5h, 24h, today, week, month, year, lifetime order. */
             200: {
                 headers: {
                     [name: string]: unknown;

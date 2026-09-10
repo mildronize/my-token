@@ -7,9 +7,9 @@ import (
 )
 
 // Window is the fixed set of time ranges the console's own read surface
-// offers (story-1/ticket-14, contract's API surface section) — the exact
-// five spellings the wire query parameter and JSON `window` values use,
-// never a caller-invented sixth.
+// offers (story-1/ticket-14, contract's API surface section, widened by
+// story-1/ticket-20) — the exact spellings the wire query parameter and
+// JSON `window` values use, never a caller-invented one.
 type Window string
 
 const (
@@ -19,45 +19,44 @@ const (
 	WindowWeek  Window = "week"
 	WindowMonth Window = "month"
 
-	// WindowLifetime is additive to the contract's own fixed five
-	// (contract's API surface section names exactly
+	// WindowYear is story-1/ticket-20's addition — calendar-anchored at
+	// Jan 1 00:00 UTC of the current year (WindowBounds, below), matching
+	// today/week/month's own calendar-boundary convention, not a rolling
+	// 365-day window.
+	WindowYear Window = "year"
+
+	// WindowLifetime was originally additive to the contract's own fixed
+	// five (contract's API surface section originally named exactly
 	// 5h|24h|today|week|month) — a build-time decision flagged in
-	// ticket 14's own report, not silently added: the ticket's own
-	// mockup spec names a "lifetime cost" summary tile, which none of
-	// the five contract windows can answer (each has a bounded start).
-	// Valid on GET /usage/summary's own `window` query parameter only
-	// (bff-openapi.yaml) — deliberately excluded from the Windows slice
-	// below, so GET /usage/windows' fixed table stays exactly the five
-	// the contract names, in that order, untouched by this addition.
+	// ticket 14's own report: the ticket's own mockup spec names a
+	// "lifetime cost" summary tile, which none of the five original
+	// windows can answer (each has a bounded start). story-1/ticket-20
+	// reopens ticket 14's "lifetime is tab-only-tile, never a tab" call:
+	// lifetime (and year, above) are now both real, selectable tabs, and
+	// both belong in the Windows slice below, not just as
+	// GET /usage/summary query values.
 	WindowLifetime Window = "lifetime"
 )
 
 // Windows lists every fixed window GET /usage/windows' own table renders,
-// in that order (contract: "the fixed 5h/24h/today/week/month table") —
-// the one place that order is named, so GetUsageWindows's own handler
-// doesn't have to repeat it. WindowLifetime is deliberately not a member
-// of this slice (see its own doc comment) — GET /usage/summary accepts it
-// as a query value regardless (parseableWindows, below, is the wider set
-// ParseWindow actually validates against).
-var Windows = []Window{Window5h, Window24h, WindowToday, WindowWeek, WindowMonth}
-
-// parseableWindows is every window value GET /usage/summary's own
-// `window` query parameter accepts — Windows (above) plus WindowLifetime.
-// A separate slice from Windows on purpose: Windows' own meaning ("the
-// fixed table's rows, in order") must stay exactly five long regardless
-// of what ParseWindow accepts elsewhere.
-var parseableWindows = append(append([]Window{}, Windows...), WindowLifetime)
+// in that order (contract: "the fixed 5h/24h/today/week/month/year/
+// lifetime table") — the one place that order is named, so
+// GetUsageWindows's own handler doesn't have to repeat it. Also the full
+// set ParseWindow (below) validates a wire-supplied window string
+// against, since story-1/ticket-20 made every member of this slice a
+// real, selectable tab — there is no longer a wider "parseable but not
+// tabbed" set distinct from this one.
+var Windows = []Window{Window5h, Window24h, WindowToday, WindowWeek, WindowMonth, WindowYear, WindowLifetime}
 
 // ParseWindow validates a wire-supplied window string against every
-// value GET /usage/summary accepts (parseableWindows, above — Windows
-// plus WindowLifetime). The bff-openapi.yaml request validator already
-// rejects an unrecognised value before a handler ever calls this (the
-// `enum` on GetUsageSummaryParams.Window) — this exists so
+// fixed window (Windows, above). The bff-openapi.yaml request validator
+// already rejects an unrecognised value before a handler ever calls this
+// (the `enum` on GetUsageSummaryParams.Window) — this exists so
 // Service.Summary/Windows has one place to convert the generated wire
 // type into this package's own Window, and so WindowBounds below has a
 // total function to build on instead of accepting a bare string.
 func ParseWindow(s string) (Window, bool) {
-	for _, w := range parseableWindows {
+	for _, w := range Windows {
 		if string(w) == s {
 			return w, true
 		}
@@ -71,17 +70,20 @@ func ParseWindow(s string) (Window, bool) {
 //
 // Two different anchoring rules, both real dashboard conventions, chosen
 // per window (story-1/ticket-14's own build-time decision — the contract
-// names the five windows but not how each one's start is computed, so
-// this is this ticket's own call, flagged in the ticket report):
+// names the original five windows but not how each one's start is
+// computed, so this is this ticket's own call, flagged in the ticket
+// report; story-1/ticket-20 adds `year` to the calendar-anchored group,
+// following the exact same style):
 //
 //   - 5h/24h are rolling: start is exactly duration before now, so
 //     "24h" always covers a full day of activity regardless of what time
 //     of day it is right now.
-//   - today/week/month are calendar-anchored at UTC: "today" starts at
-//     the most recent UTC midnight, "week" at the most recent UTC Monday
-//     00:00, "month" at the 1st of the current UTC month at 00:00 — the
-//     same "which bucket does this dashboard say I'm in right now"
-//     framing a calendar-based tab usually means, not a rolling 7/30-day
+//   - today/week/month/year are calendar-anchored at UTC: "today" starts
+//     at the most recent UTC midnight, "week" at the most recent UTC
+//     Monday 00:00, "month" at the 1st of the current UTC month at
+//     00:00, "year" at Jan 1 of the current UTC year at 00:00 — the same
+//     "which bucket does this dashboard say I'm in right now" framing a
+//     calendar-based tab usually means, not a rolling 30/365-day
 //     lookback. now is always treated as UTC (now.UTC()) so this is
 //     deterministic regardless of the caller's local time zone — this
 //     service has no per-user timezone concept to anchor to instead.
@@ -104,6 +106,8 @@ func WindowBounds(w Window, now time.Time) (start, end time.Time, err error) {
 		start = startOfDay.AddDate(0, 0, -daysSinceMonday)
 	case WindowMonth:
 		start = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	case WindowYear:
+		start = time.Date(now.Year(), 1, 1, 0, 0, 0, 0, time.UTC)
 	case WindowLifetime:
 		// Comfortably before any real usage_events row can exist (Claude
 		// Code postdates this by years) — a fixed, safe left bound rather

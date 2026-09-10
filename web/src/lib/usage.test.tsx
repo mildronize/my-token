@@ -53,6 +53,29 @@ describe("useUsageSummaryQuery", () => {
     expect(result.current.data?.breakdown[0].key).toBe("freya");
   });
 
+  it("passes group_by=actor and window=year through unchanged", async () => {
+    let calledUrl: string | undefined;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      calledUrl = typeof input === "string" ? input : input.toString();
+      return new Response(
+        JSON.stringify({
+          totals: { tokens: 0, cost: 0, turns: 0 },
+          breakdown: [],
+          reporting_installs: 0,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const { result } = renderHook(() => useUsageSummaryQuery("year", "actor"), {
+      wrapper: makeWrapper(newQueryClient()),
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(calledUrl).toBe("/api/bff/usage/summary?window=year&group_by=actor");
+  });
+
   it("passes group_by=path and window=lifetime through unchanged", async () => {
     let calledUrl: string | undefined;
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
@@ -97,6 +120,8 @@ describe("useUsageWindowsQuery", () => {
             { window: "today", turns: 2, tokens: 20, cost: 0.2 },
             { window: "week", turns: 2, tokens: 20, cost: 0.2 },
             { window: "month", turns: 2, tokens: 20, cost: 0.2 },
+            { window: "year", turns: 2, tokens: 20, cost: 0.2 },
+            { window: "lifetime", turns: 2, tokens: 20, cost: 0.2 },
           ],
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
@@ -110,7 +135,9 @@ describe("useUsageWindowsQuery", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(calledUrl).toBe("/api/bff/usage/windows");
-    expect(result.current.data?.windows).toHaveLength(5);
+    expect(result.current.data?.windows).toHaveLength(7);
     expect(result.current.data?.windows[0].window).toBe("5h");
+    expect(result.current.data?.windows[5].window).toBe("year");
+    expect(result.current.data?.windows[6].window).toBe("lifetime");
   });
 });
