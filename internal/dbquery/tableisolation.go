@@ -60,6 +60,11 @@ var TableOwnership = map[string]string{
 	"users":        "identity",
 	"api_keys":     "identity",
 	"usage_events": "usage",
+	// story-1/ticket-18: machines is a second table owned by the same
+	// "usage" domain module (db/queries/machines.sql), not a separate
+	// domain — see that file's own header for why the hostname lookup
+	// belongs alongside usage_events rather than as its own module.
+	"machines": "usage",
 }
 
 // ReadOnlyGrant is the only sanctioned way for a query file to reference

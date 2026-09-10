@@ -112,7 +112,55 @@ func (s *Service) Summary(ctx context.Context, window Window, groupBy GroupBy, n
 		return SummaryResult{}, err
 	}
 
-	return Aggregate(events, groupBy), nil
+	result := Aggregate(events, groupBy)
+
+	if groupBy == GroupByMachine {
+		if err := s.substituteMachineHostnames(ctx, result.Breakdown); err != nil {
+			return SummaryResult{}, err
+		}
+	}
+
+	return result, nil
+}
+
+// substituteMachineHostnames replaces each breakdown row's Key (currently
+// the raw install_id Aggregate grouped by) with machines.hostname,
+// stashing the original install_id in RawKey so the console can still
+// show it (contract's "machine label" rule: hostname is the label,
+// install_id stays reachable via tooltip — summary.go's BreakdownRow doc
+// comment). A row whose install_id has no machines row at all (contract:
+// "shouldn't normally happen given upsert-on-every-batch, but don't let
+// that case produce a blank/null key") is left exactly as Aggregate
+// produced it — Key stays the raw install_id, RawKey stays empty, so the
+// console falls back to showing the install_id itself rather than a
+// blank label.
+func (s *Service) substituteMachineHostnames(ctx context.Context, breakdown []BreakdownRow) error {
+	if len(breakdown) == 0 {
+		return nil
+	}
+	hostnames, err := s.Repo.MachineHostnames(ctx)
+	if err != nil {
+		return err
+	}
+	for i := range breakdown {
+		installID := breakdown[i].Key
+		if hostname, ok := hostnames[installID]; ok && hostname != "" {
+			breakdown[i].Key = hostname
+			breakdown[i].RawKey = installID
+		}
+	}
+	return nil
+}
+
+// UpsertMachine records the reporting collector's own (installID,
+// hostname) pair, refreshing last_seen_at to now — story-1/ticket-18:
+// called on every POST /api/v1/usage-events/batch
+// (internal/transport/publicapi/usage_handler.go's
+// IngestUsageEventsBatch), additive to IngestBatch, not a replacement for
+// it (contract's Data model: `machines` is "added on top of ticket 11's
+// original design", usage_events.machine itself is untouched).
+func (s *Service) UpsertMachine(ctx context.Context, installID, hostname string, now time.Time) error {
+	return s.Repo.UpsertMachine(ctx, installID, hostname, now)
 }
 
 // WindowTotals is one row of GET /api/bff/usage/windows' fixed table —

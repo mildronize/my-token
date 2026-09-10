@@ -166,12 +166,23 @@ type Totals struct {
 }
 
 // BreakdownRow is one entry in GET /usage/summary's `breakdown` array —
-// Key is always the dimension's raw stored value (an actor name, a
-// canonicalized path, or a machine's install_id); display shortening
-// (contract's "Console display rules") is the SPA's own job over this
-// raw value, never done here.
+// Key is the dimension's stored value (an actor name, a canonicalized
+// path, or — story-1/ticket-18 — a machine's hostname once
+// Service.Summary substitutes it in for group_by=machine); display
+// shortening (contract's "Console display rules") is the SPA's own job
+// over this value, never done here.
+//
+// RawKey is empty except when Service.Summary has substituted Key for a
+// friendlier display value (group_by=machine: Key becomes
+// machines.hostname, RawKey carries the install_id Aggregate originally
+// grouped by) — the contract's "machine label" rule requires the raw
+// install_id stay reachable (the console's tooltip), the same
+// "shortened label, full value still reachable" pattern `path` already
+// follows. Aggregate itself never sets this field; it is populated only
+// by Service.Summary's post-aggregation substitution pass.
 type BreakdownRow struct {
 	Key    string
+	RawKey string
 	Tokens int64
 	Cost   float64
 	Turns  int64

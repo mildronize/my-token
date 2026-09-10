@@ -46,6 +46,17 @@ type Querier interface {
 	// (ListAllAgentAPIKeysRow) is scoped to this one query only; every other
 	// query in this file keeps returning bare db.ApiKey, unaffected.
 	ListAllAgentAPIKeys(ctx context.Context) ([]ListAllAgentAPIKeysRow, error)
+	// Every known machine's install_id -> hostname mapping -- the "By
+	// machine" breakdown's own label lookup (internal/domain/usage/
+	// service.go's Summary, when group_by=machine substitutes each
+	// breakdown row's raw install_id key for machines.hostname). The join
+	// against usage_events.machine happens in Go over this result
+	// (Service.Summary), not as a SQL JOIN here: Aggregate (summary.go) is
+	// the existing pure function that already builds the breakdown keyed by
+	// the raw install_id, so a hostname-substitution pass over its output
+	// reuses that logic instead of re-deriving group_by/window aggregation
+	// in SQL.
+	ListMachines(ctx context.Context) ([]ListMachinesRow, error)
 	// story-1/ticket-14: every event whose created_at falls between the two
 	// bound parameters below, range_start inclusive, range_end exclusive.
 	// The raw rows behind the console's own read surface --
@@ -62,6 +73,33 @@ type Querier interface {
 	// so no explicit role filter is needed for this to mean exactly "any
 	// agent's key".
 	RevokeAPIKeyByID(ctx context.Context, arg RevokeAPIKeyByIDParams) (ApiKey, error)
+	// story-1/ticket-18: the reporting collector's own (install_id, hostname)
+	// pair, refreshed on every ingestion batch
+	// (internal/domain/usage/service.go's UpsertMachine, called from
+	// internal/transport/publicapi/usage_handler.go's
+	// IngestUsageEventsBatch) so a renamed machine's console label catches up
+	// rather than staying stuck on whatever hostname it was first seen with
+	// (contract's Data model: `machines`). INSERT OR REPLACE, not
+	// usage_events.sql's own INSERT OR IGNORE -- that table's row is meant
+	// to change on every call (the opposite of usage_events' write-once
+	// idempotency), and REPLACE gives that for free on a install_id conflict
+	// since every column is supplied on every call (no partial-update case
+	// this query ever needs). Deliberately not
+	// "ON CONFLICT(install_id) DO UPDATE SET ..." -- that form's own
+	// "DO UPDATE SET" false-positives internal/dbquery/tableisolation.go's
+	// table scanner (it reads the SET clause's target list as if it named a
+	// table called "set"; see that file's own doc comment on why its scanner
+	// deliberately doesn't try to handle every SQL form rather than widen
+	// itself further). INSERT OR REPLACE has no such clause and sidesteps
+	// the false positive entirely, while remaining functionally equivalent
+	// for this query's own all-columns-every-time shape.
+	//
+	// Note: this file must stay plain ASCII -- bin/sqlc v1.31.1 corrupts its
+	// own star-expansion byte offsets on any non-ASCII byte in a
+	// db/queries/*.sql file (internal/db_queries_ascii_test.go's own doc
+	// comment has the full history). No em dashes, no Thai, no "section" /
+	// other non-ASCII punctuation in this file.
+	UpsertMachine(ctx context.Context, arg UpsertMachineParams) error
 }
 
 var _ Querier = (*Queries)(nil)

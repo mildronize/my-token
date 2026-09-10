@@ -56,6 +56,24 @@ type Repository interface {
 	// the returned slice (summary.go's Aggregate) so it's testable
 	// without a database.
 	ListEventsInWindow(ctx context.Context, start, end time.Time) ([]Event, error)
+
+	// UpsertMachine writes (installID, hostname) into machines, refreshing
+	// lastSeenAt on every call regardless of whether installID already had
+	// a row — story-1/ticket-18: called on every ingestion batch
+	// (Service.UpsertMachine) so a renamed machine's console label catches
+	// up rather than staying stuck on whatever hostname it was first seen
+	// with (contract's Data model: `machines`).
+	UpsertMachine(ctx context.Context, installID, hostname string, lastSeenAt time.Time) error
+
+	// MachineHostnames returns every known machine's install_id ->
+	// hostname mapping — story-1/ticket-18: Service.Summary's own
+	// hostname-substitution pass over Aggregate's output, when
+	// group_by=machine (contract's "machine label" display rule). A
+	// install_id with no row in machines simply has no entry in the
+	// returned map — the caller (Service.Summary) is the one that decides
+	// what "no entry" means (fall back to the raw install_id), not this
+	// method.
+	MachineHostnames(ctx context.Context) (map[string]string, error)
 }
 
 // Repo is the only type in this package that imports the sqlc-generated
@@ -152,4 +170,31 @@ func (r *Repo) ListEventsInWindow(ctx context.Context, start, end time.Time) ([]
 		})
 	}
 	return events, nil
+}
+
+// UpsertMachine implements Repository.UpsertMachine over the sqlc-generated
+// UpsertMachine query (db/queries/machines.sql) — a real upsert (INSERT OR
+// REPLACE on the install_id primary key), not an insert-once: a second
+// call for the same installID with a different hostname overwrites the
+// stored value rather than leaving the first-seen one in place.
+func (r *Repo) UpsertMachine(ctx context.Context, installID, hostname string, lastSeenAt time.Time) error {
+	return r.q.UpsertMachine(ctx, db.UpsertMachineParams{
+		InstallID:  installID,
+		Hostname:   hostname,
+		LastSeenAt: lastSeenAt,
+	})
+}
+
+// MachineHostnames implements Repository.MachineHostnames over the
+// sqlc-generated ListMachines query.
+func (r *Repo) MachineHostnames(ctx context.Context) (map[string]string, error) {
+	rows, err := r.q.ListMachines(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(rows))
+	for _, row := range rows {
+		out[row.InstallID] = row.Hostname
+	}
+	return out, nil
 }

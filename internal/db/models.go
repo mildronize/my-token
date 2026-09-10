@@ -19,6 +19,12 @@ type ApiKey struct {
 	RevokedAt sql.NullTime `json:"revoked_at"`
 }
 
+type Machine struct {
+	InstallID  string    `json:"install_id"`
+	Hostname   string    `json:"hostname"`
+	LastSeenAt time.Time `json:"last_seen_at"`
+}
+
 type UsageEvent struct {
 	ID                       string    `json:"id"`
 	SessionID                string    `json:"session_id"`

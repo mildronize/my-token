@@ -171,8 +171,10 @@ export interface components {
             turns: number;
         };
         UsageBreakdownRow: {
-            /** @description The raw dimension value (an actor name, a canonicalized path, or a machine's `install_id`) — display shortening (contract's "Console display rules", `path` basename/collision handling) is the SPA's own job, not this endpoint's; this is always the ground-truth value. */
+            /** @description The dimension value to display: an actor name, a canonicalized path, or — group_by=machine, story-1/ticket-18 — the reporting machine's `hostname` (joined from `machines` on `usage_events.machine` = `machines.install_id`), not the raw `install_id`, falling back to the raw `install_id` itself if a machine has events but no corresponding `machines` row. Display shortening beyond this substitution (contract's "Console display rules", `path` basename/collision handling) is still the SPA's own job, not this endpoint's. */
             key: string;
+            /** @description Present only when `key` has been substituted for a friendlier display value (currently: group_by=machine, where `key` is the hostname) — carries the ground-truth raw value (`key`'s own former meaning: the machine's `install_id`) so the console can still surface it, e.g. via a tooltip (contract's "machine label" rule — same "shortened label, full value still reachable" pattern as `path`). Absent for every other group_by, since `key` is already the raw value there. */
+            raw_key?: string;
             /** Format: int64 */
             tokens: number;
             /** Format: double */

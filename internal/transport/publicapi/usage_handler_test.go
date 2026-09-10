@@ -160,6 +160,79 @@ func TestHandler_IngestUsageEventsBatch_Unauthenticated_Returns401(t *testing.T)
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 }
 
+// --- machines: install_id/hostname upserted on every batch (story-1/
+// ticket-18) ---------------------------------------------------------
+
+// countMachineRows returns machines' current row count.
+func countMachineRows(t *testing.T, conn *sql.DB) int {
+	t.Helper()
+	var n int
+	require.NoError(t, conn.QueryRow(`SELECT COUNT(*) FROM machines`).Scan(&n))
+	return n
+}
+
+// TestHandler_IngestUsageEventsBatch_UpsertsMachine is this ticket's own
+// core acceptance criterion for the write side: a batch's top-level
+// install_id/hostname (previously read and discarded, per the contract's
+// own description of the bug being fixed) now lands in the machines
+// table, additive to the usual usage_events insert.
+func TestHandler_IngestUsageEventsBatch_UpsertsMachine(t *testing.T) {
+	router, conn := newIntegrationRouter(t)
+	_, rawKey := createAgentWithKey(t, conn, "collector-1")
+
+	rec := doJSONRequest(t, router, http.MethodPost, "/api/v1/usage-events/batch", rawKey, map[string]any{
+		"install_id": "install-1",
+		"hostname":   "thw-home",
+		"events":     []map[string]any{usageEventBody("msg-1")},
+	})
+	require.Equal(t, http.StatusCreated, rec.Code)
+
+	assert.Equal(t, 1, countMachineRows(t, conn))
+	var gotHostname string
+	require.NoError(t, conn.QueryRow(`SELECT hostname FROM machines WHERE install_id = ?`, "install-1").Scan(&gotHostname))
+	assert.Equal(t, "thw-home", gotHostname)
+
+	// usage_events.machine itself is unchanged — still just the raw
+	// install_id string, still the real join key (contract's Data model:
+	// "usage_events.machine ... is unchanged and stays the real
+	// identity/join key").
+	var gotMachine string
+	require.NoError(t, conn.QueryRow(`SELECT machine FROM usage_events WHERE id = ?`, "msg-1").Scan(&gotMachine))
+	assert.Equal(t, "install-1", gotMachine)
+}
+
+// TestHandler_IngestUsageEventsBatch_SecondBatchWithChangedHostname_UpdatesMachine
+// is this ticket's own explicitly-called-out acceptance test, exercised
+// through the real HTTP handler rather than the repo layer directly
+// (repo_test.go's TestRepo_UpsertMachine_SecondCallWithChangedHostname_
+// UpdatesStoredValue already proves it at that layer): a second batch
+// reporting a CHANGED hostname for the same install_id updates the
+// stored value — a real upsert, not an insert-once.
+func TestHandler_IngestUsageEventsBatch_SecondBatchWithChangedHostname_UpdatesMachine(t *testing.T) {
+	router, conn := newIntegrationRouter(t)
+	_, rawKey := createAgentWithKey(t, conn, "collector-1")
+
+	first := doJSONRequest(t, router, http.MethodPost, "/api/v1/usage-events/batch", rawKey, map[string]any{
+		"install_id": "install-1",
+		"hostname":   "old-hostname",
+		"events":     []map[string]any{usageEventBody("msg-1")},
+	})
+	require.Equal(t, http.StatusCreated, first.Code)
+
+	msg2 := usageEventBody("msg-2")
+	second := doJSONRequest(t, router, http.MethodPost, "/api/v1/usage-events/batch", rawKey, map[string]any{
+		"install_id": "install-1",
+		"hostname":   "new-hostname",
+		"events":     []map[string]any{msg2},
+	})
+	require.Equal(t, http.StatusCreated, second.Code)
+
+	assert.Equal(t, 1, countMachineRows(t, conn), "a resend with the same install_id must update the one existing row")
+	var gotHostname string
+	require.NoError(t, conn.QueryRow(`SELECT hostname FROM machines WHERE install_id = ?`, "install-1").Scan(&gotHostname))
+	assert.Equal(t, "new-hostname", gotHostname, "the stored hostname must be the changed one, not the first-seen one")
+}
+
 // TestHandler_IngestUsageEventsBatch_TimestampBecomesCreatedAt proves the
 // client-supplied `timestamp` (unlike cost/source) is a legitimate input
 // that flows straight through to created_at, not overwritten with

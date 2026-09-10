@@ -41,18 +41,28 @@ func toWireTotals(t usage.Totals) bffapi.UsageTotals {
 }
 
 // toWireBreakdown converts a []usage.BreakdownRow into the wire
-// []UsageBreakdownRow — Key is always the dimension's raw stored value
-// (contract's "Console display rules": display shortening is the SPA's
-// own job over this raw value, never done here).
+// []UsageBreakdownRow — Key is the dimension's display value (contract's
+// "Console display rules": display shortening beyond that is the SPA's
+// own job, never done here). RawKey (story-1/ticket-18) is only set on
+// the wire when usage.BreakdownRow.RawKey is non-empty — Service.Summary
+// only ever populates it for group_by=machine's hostname substitution, so
+// every other group_by's rows carry no raw_key at all on the wire
+// (bff-openapi.yaml's own `raw_key` doc comment: "absent for every other
+// group_by").
 func toWireBreakdown(rows []usage.BreakdownRow) []bffapi.UsageBreakdownRow {
 	out := make([]bffapi.UsageBreakdownRow, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, bffapi.UsageBreakdownRow{
+		row := bffapi.UsageBreakdownRow{
 			Key:    r.Key,
 			Tokens: r.Tokens,
 			Cost:   r.Cost,
 			Turns:  r.Turns,
-		})
+		}
+		if r.RawKey != "" {
+			rawKey := r.RawKey
+			row.RawKey = &rawKey
+		}
+		out = append(out, row)
 	}
 	return out
 }

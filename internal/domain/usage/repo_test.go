@@ -186,3 +186,92 @@ func TestI4_UsageRepoOnlyQueriesUsageEventsTable(t *testing.T) {
 
 	dbquery.AssertQueryFileReferencesOnlyOwnTable(t, queriesDir, "usage_events.sql", "usage_events")
 }
+
+// --- machines: install_id -> hostname (story-1/ticket-18) ---------------
+
+// TestI4_MachinesRepoOnlyQueriesMachinesTable mirrors
+// TestI4_UsageRepoOnlyQueriesUsageEventsTable above, for
+// db/queries/machines.sql — machines is a second table owned by this same
+// "usage" domain module (dbquery.TableOwnership), not a separate one.
+func TestI4_MachinesRepoOnlyQueriesMachinesTable(t *testing.T) {
+	root := repoRootForTests(t)
+	queriesDir := filepath.Join(root, "db", "queries")
+
+	dbquery.AssertQueryFileReferencesOnlyOwnTable(t, queriesDir, "machines.sql", "machines")
+}
+
+// TestRepo_UpsertMachine_FirstCall_Inserts proves the plain first-seen
+// case: no prior row, UpsertMachine creates one.
+func TestRepo_UpsertMachine_FirstCall_Inserts(t *testing.T) {
+	ctx := context.Background()
+	conn := newTestDB(t)
+	repo := NewRepo(conn)
+
+	firstSeen := time.Date(2026, 9, 10, 8, 0, 0, 0, time.UTC)
+	require.NoError(t, repo.UpsertMachine(ctx, "install-1", "thw-home", firstSeen))
+
+	assert.Equal(t, 1, countRows(t, conn, "machines"))
+	hostnames, err := repo.MachineHostnames(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"install-1": "thw-home"}, hostnames)
+}
+
+// TestRepo_UpsertMachine_SecondCallWithChangedHostname_UpdatesStoredValue
+// is this ticket's own explicitly-called-out acceptance test: "a second
+// batch with a CHANGED hostname for the same install_id updates the
+// stored value, proving it's a real upsert not just an insert-once."
+// Also asserts the row count stays at 1 (INSERT OR REPLACE on the
+// install_id primary key, not a second row) and that last_seen_at is
+// refreshed to the second call's timestamp, not left at the first.
+func TestRepo_UpsertMachine_SecondCallWithChangedHostname_UpdatesStoredValue(t *testing.T) {
+	ctx := context.Background()
+	conn := newTestDB(t)
+	repo := NewRepo(conn)
+
+	firstSeen := time.Date(2026, 9, 10, 8, 0, 0, 0, time.UTC)
+	require.NoError(t, repo.UpsertMachine(ctx, "install-1", "old-hostname", firstSeen))
+
+	secondSeen := time.Date(2026, 9, 10, 9, 30, 0, 0, time.UTC)
+	require.NoError(t, repo.UpsertMachine(ctx, "install-1", "new-hostname", secondSeen))
+
+	assert.Equal(t, 1, countRows(t, conn, "machines"), "a resend must update the one existing row, not insert a second")
+
+	hostnames, err := repo.MachineHostnames(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "new-hostname", hostnames["install-1"], "the stored hostname must be the changed one, not the first-seen one")
+
+	var gotLastSeenAt time.Time
+	require.NoError(t, conn.QueryRow(`SELECT last_seen_at FROM machines WHERE install_id = ?`, "install-1").Scan(&gotLastSeenAt))
+	assert.True(t, gotLastSeenAt.Equal(secondSeen), "last_seen_at must be refreshed to the second call's timestamp")
+}
+
+// TestRepo_UpsertMachine_DifferentInstallIDs_BothLand proves UpsertMachine
+// only ever touches the one row named by installID — a second, distinct
+// machine reporting in must not clobber the first's row.
+func TestRepo_UpsertMachine_DifferentInstallIDs_BothLand(t *testing.T) {
+	ctx := context.Background()
+	conn := newTestDB(t)
+	repo := NewRepo(conn)
+
+	now := time.Date(2026, 9, 10, 8, 0, 0, 0, time.UTC)
+	require.NoError(t, repo.UpsertMachine(ctx, "install-1", "thw-home", now))
+	require.NoError(t, repo.UpsertMachine(ctx, "install-2", "thw-laptop", now))
+
+	assert.Equal(t, 2, countRows(t, conn, "machines"))
+	hostnames, err := repo.MachineHostnames(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"install-1": "thw-home", "install-2": "thw-laptop"}, hostnames)
+}
+
+// TestRepo_MachineHostnames_NoRows_EmptyMap proves the zero-rows case
+// returns an empty map, not an error — Service.substituteMachineHostnames
+// relies on this to mean "no known hostnames," not a failure.
+func TestRepo_MachineHostnames_NoRows_EmptyMap(t *testing.T) {
+	ctx := context.Background()
+	conn := newTestDB(t)
+	repo := NewRepo(conn)
+
+	hostnames, err := repo.MachineHostnames(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, hostnames)
+}

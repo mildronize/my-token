@@ -69,6 +69,19 @@ func newBFFRouterForUsage(t *testing.T) (router *gin.Engine, sessionValue string
 	return router, sessionValue, conn
 }
 
+// seedMachine inserts one machines row directly (bypassing
+// usage.Repo/usage.Service's own UpsertMachine path) — mirrors
+// seedUsageEvent's own reasoning (above): these tests shouldn't need to
+// trust a second package's write path just to set up a fixture.
+func seedMachine(t *testing.T, conn *sql.DB, installID, hostname string, lastSeenAt time.Time) {
+	t.Helper()
+	_, err := conn.Exec(
+		`INSERT INTO machines (install_id, hostname, last_seen_at) VALUES (?, ?, ?)`,
+		installID, hostname, lastSeenAt,
+	)
+	require.NoError(t, err)
+}
+
 func decodeUsageSummary(t *testing.T, rec *httptest.ResponseRecorder) bffapi.UsageSummary {
 	t.Helper()
 	var got bffapi.UsageSummary
@@ -128,6 +141,86 @@ func TestGetUsageSummary_GroupByPath(t *testing.T) {
 	require.Len(t, got.Breakdown, 1, "both events share the same path — group_by=path collapses them into one row")
 	assert.Equal(t, "/gits/my-task", got.Breakdown[0].Key)
 	assert.Equal(t, int64(2), got.Breakdown[0].Turns)
+}
+
+// TestGetUsageSummary_GroupByMachine_ReturnsHostnamesNotUUIDs is this
+// ticket's own core acceptance test for the read side: seeded
+// usage_events + machines rows, group_by=machine's breakdown key comes
+// back as the seeded hostname, not the raw install_id — and RawKey
+// carries that raw install_id so the console can still show it via
+// tooltip (contract's "machine label" rule).
+func TestGetUsageSummary_GroupByMachine_ReturnsHostnamesNotUUIDs(t *testing.T) {
+	router, session, conn := newBFFRouterForUsage(t)
+	now := time.Now().UTC()
+
+	seedMachine(t, conn, "install-a-uuid", "thw-home", now)
+	seedMachine(t, conn, "install-b-uuid", "thw-laptop", now)
+
+	seedUsageEvent(t, conn, "e1", "freya", "/gits/my-task", "install-a-uuid", 100, 2.0, now.Add(-1*time.Hour))
+	seedUsageEvent(t, conn, "e2", "freya", "/gits/my-task", "install-b-uuid", 100, 1.0, now.Add(-1*time.Hour))
+
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/usage/summary?window=24h&group_by=machine", session, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	got := decodeUsageSummary(t, rec)
+	require.Len(t, got.Breakdown, 2)
+
+	// install-a-uuid has the higher cost, sorted first (Aggregate's own
+	// cost-descending order — unaffected by the hostname substitution
+	// happening after aggregation).
+	assert.Equal(t, "thw-home", got.Breakdown[0].Key, "key must be the hostname, not the raw install_id")
+	require.NotNil(t, got.Breakdown[0].RawKey)
+	assert.Equal(t, "install-a-uuid", *got.Breakdown[0].RawKey, "the raw install_id must still be reachable")
+
+	assert.Equal(t, "thw-laptop", got.Breakdown[1].Key)
+	require.NotNil(t, got.Breakdown[1].RawKey)
+	assert.Equal(t, "install-b-uuid", *got.Breakdown[1].RawKey)
+
+	// Neither raw install_id string ever appears as a `key` value —
+	// exactly what this ticket's "not UUIDs" wording is asserting.
+	for _, row := range got.Breakdown {
+		assert.NotEqual(t, "install-a-uuid", row.Key)
+		assert.NotEqual(t, "install-b-uuid", row.Key)
+	}
+}
+
+// TestGetUsageSummary_GroupByMachine_NoMachinesRow_FallsBackToInstallID
+// covers the contract's own explicitly-named edge case end to end: a
+// machine with usage_events rows but no corresponding machines row
+// (shouldn't happen given upsert-on-every-batch, but must never show a
+// blank/null key).
+func TestGetUsageSummary_GroupByMachine_NoMachinesRow_FallsBackToInstallID(t *testing.T) {
+	router, session, conn := newBFFRouterForUsage(t)
+	now := time.Now().UTC()
+
+	// Deliberately no seedMachine call for "install-orphan".
+	seedUsageEvent(t, conn, "e1", "freya", "/gits/my-task", "install-orphan", 100, 1.0, now.Add(-1*time.Hour))
+
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/usage/summary?window=24h&group_by=machine", session, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	got := decodeUsageSummary(t, rec)
+	require.Len(t, got.Breakdown, 1)
+	assert.Equal(t, "install-orphan", got.Breakdown[0].Key, "must fall back to the raw install_id, never a blank key")
+	assert.Nil(t, got.Breakdown[0].RawKey, "no substitution happened, so there is no separate raw_key on the wire")
+}
+
+// TestGetUsageSummary_GroupByActor_RowsCarryNoRawKey proves raw_key is
+// scoped to group_by=machine's own substitution — every other group_by's
+// rows must carry no raw_key at all on the wire (bff-openapi.yaml's own
+// doc comment: "absent for every other group_by").
+func TestGetUsageSummary_GroupByActor_RowsCarryNoRawKey(t *testing.T) {
+	router, session, conn := newBFFRouterForUsage(t)
+	now := time.Now().UTC()
+
+	seedUsageEvent(t, conn, "e1", "freya", "/gits/my-task", "install-a", 100, 1.0, now.Add(-1*time.Hour))
+
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/usage/summary?window=24h&group_by=actor", session, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	got := decodeUsageSummary(t, rec)
+	require.Len(t, got.Breakdown, 1)
+	assert.Nil(t, got.Breakdown[0].RawKey)
 }
 
 // TestGetUsageSummary_WindowExcludesEventsOutsideRange proves the window

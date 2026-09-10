@@ -2,6 +2,7 @@ package publicapi
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -55,11 +56,16 @@ func toIngestEvent(e api.UsageEventInput) usage.IngestEvent {
 // `hostname` (api.IngestUsageEventsBatchRequest's own top-level fields)
 // are required by the contract's own wire shape (contract's API surface
 // section: "Body: { install_id, hostname, events: [...] }") — this
-// handler does not invent them speculatively. They identify the
-// reporting collector for observability only; ticket 11's domain layer
-// has no use for them yet (a future console/collector-health ticket
-// might), so they are read and discarded here rather than threaded
-// through to usage.Service for no purpose it currently has.
+// handler does not invent them speculatively.
+//
+// story-1/ticket-18: `install_id`/`hostname` are now upserted into the
+// `machines` table on every batch (Service.UpsertMachine), instead of
+// being read and discarded as ticket 11 originally left them — see the
+// contract's Data model, "machines ... Added on top of ticket 11's
+// original design, which read hostname off the ingestion payload and
+// discarded it." Additive to the existing ingestion flow: usage_events
+// rows are still inserted exactly as before, this just also records the
+// reporting machine's current hostname alongside them.
 func (s *UsageServer) IngestUsageEventsBatch(c *gin.Context) {
 	if _, ok := ActorFromContext(c); !ok {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, unauthorizedBody)
@@ -75,6 +81,11 @@ func (s *UsageServer) IngestUsageEventsBatch(c *gin.Context) {
 		// handler at all — this is a defensive fallback, the same
 		// convention every other handler in this package follows.
 		c.AbortWithStatus(http.StatusBadRequest)
+		return
+	}
+
+	if err := s.Service.UpsertMachine(c.Request.Context(), req.InstallId, req.Hostname, time.Now()); err != nil {
+		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}
 

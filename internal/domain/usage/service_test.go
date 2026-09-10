@@ -30,6 +30,20 @@ type fakeRepo struct {
 	events        []Event
 	windowCalls   []windowCall
 	listWindowErr error
+
+	// machines is UpsertMachine's own in-memory store (installID ->
+	// hostname), read back by MachineHostnames — a plain map stand-in for
+	// the real ON CONFLICT DO UPDATE upsert (repo_test.go proves that
+	// against a real database).
+	machines          map[string]string
+	upsertMachineErr  error
+	hostnamesErr      error
+	upsertMachineCall []upsertMachineCall
+}
+
+type upsertMachineCall struct {
+	installID, hostname string
+	lastSeenAt          time.Time
 }
 
 type windowCall struct {
@@ -37,7 +51,7 @@ type windowCall struct {
 }
 
 func newFakeRepo() *fakeRepo {
-	return &fakeRepo{insertedIDs: map[string]bool{}}
+	return &fakeRepo{insertedIDs: map[string]bool{}, machines: map[string]string{}}
 }
 
 func (f *fakeRepo) InsertBatch(ctx context.Context, batch []Event) (int64, error) {
@@ -70,6 +84,26 @@ func (f *fakeRepo) ListEventsInWindow(ctx context.Context, start, end time.Time)
 		if !e.CreatedAt.Before(start) && e.CreatedAt.Before(end) {
 			out = append(out, e)
 		}
+	}
+	return out, nil
+}
+
+func (f *fakeRepo) UpsertMachine(ctx context.Context, installID, hostname string, lastSeenAt time.Time) error {
+	f.upsertMachineCall = append(f.upsertMachineCall, upsertMachineCall{installID: installID, hostname: hostname, lastSeenAt: lastSeenAt})
+	if f.upsertMachineErr != nil {
+		return f.upsertMachineErr
+	}
+	f.machines[installID] = hostname
+	return nil
+}
+
+func (f *fakeRepo) MachineHostnames(ctx context.Context) (map[string]string, error) {
+	if f.hostnamesErr != nil {
+		return nil, f.hostnamesErr
+	}
+	out := make(map[string]string, len(f.machines))
+	for k, v := range f.machines {
+		out[k] = v
 	}
 	return out, nil
 }
@@ -263,4 +297,107 @@ func TestService_Windows_RepoError_Propagates(t *testing.T) {
 	svc := NewService(repo)
 	_, err := svc.Windows(context.Background(), time.Now())
 	assert.ErrorIs(t, err, repo.listWindowErr)
+}
+
+// --- Service.UpsertMachine / group_by=machine hostname substitution ----
+// story-1/ticket-18.
+
+// TestService_UpsertMachine_DelegatesToRepoWithNow proves Service.
+// UpsertMachine is a thin pass-through to Repo.UpsertMachine, carrying
+// the caller-supplied `now` straight through as last_seen_at — the real
+// upsert-overwrites-not-insert-once behavior against a real database is
+// this ticket's own explicitly-called-out test, proven in repo_test.go
+// instead (a fake map can't demonstrate a real SQL upsert).
+func TestService_UpsertMachine_DelegatesToRepoWithNow(t *testing.T) {
+	repo := newFakeRepo()
+	svc := NewService(repo)
+	now := time.Date(2026, 9, 10, 8, 0, 0, 0, time.UTC)
+
+	err := svc.UpsertMachine(context.Background(), "install-1", "thw-home", now)
+	require.NoError(t, err)
+
+	require.Len(t, repo.upsertMachineCall, 1)
+	assert.Equal(t, "install-1", repo.upsertMachineCall[0].installID)
+	assert.Equal(t, "thw-home", repo.upsertMachineCall[0].hostname)
+	assert.Equal(t, now, repo.upsertMachineCall[0].lastSeenAt)
+}
+
+func TestService_UpsertMachine_RepoError_Propagates(t *testing.T) {
+	repo := newFakeRepo()
+	repo.upsertMachineErr = errors.New("db down")
+	svc := NewService(repo)
+
+	err := svc.UpsertMachine(context.Background(), "install-1", "thw-home", time.Now())
+	assert.ErrorIs(t, err, repo.upsertMachineErr)
+}
+
+// TestService_Summary_GroupByMachine_SubstitutesHostname is this ticket's
+// own core acceptance criterion for the read side: group_by=machine's
+// breakdown key comes back as machines.hostname, not the raw install_id
+// Aggregate originally grouped by — and RawKey carries that install_id so
+// the console can still show it (contract's "machine label" rule: raw
+// install_id reachable via tooltip).
+func TestService_Summary_GroupByMachine_SubstitutesHostname(t *testing.T) {
+	repo := newFakeRepo()
+	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	repo.events = []Event{ev("freya", "p1", "install-1", 100, 0, 0, 0, 1.0)}
+	repo.events[0].CreatedAt = now.Add(-1 * time.Hour)
+	repo.machines["install-1"] = "thw-home"
+
+	svc := NewService(repo)
+	got, err := svc.Summary(context.Background(), Window24h, GroupByMachine, now)
+	require.NoError(t, err)
+
+	require.Len(t, got.Breakdown, 1)
+	assert.Equal(t, "thw-home", got.Breakdown[0].Key, "key must be the hostname, not the raw install_id")
+	assert.Equal(t, "install-1", got.Breakdown[0].RawKey, "the raw install_id must still be reachable")
+}
+
+// TestService_Summary_GroupByMachine_NoMachinesRow_FallsBackToInstallID
+// covers the contract's own explicitly-named edge case: a machine with
+// usage_events rows but no corresponding machines row (shouldn't happen
+// given upsert-on-every-batch, but must never show a blank/null key).
+func TestService_Summary_GroupByMachine_NoMachinesRow_FallsBackToInstallID(t *testing.T) {
+	repo := newFakeRepo()
+	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	repo.events = []Event{ev("freya", "p1", "install-orphan", 100, 0, 0, 0, 1.0)}
+	repo.events[0].CreatedAt = now.Add(-1 * time.Hour)
+	// Deliberately no repo.machines["install-orphan"] entry.
+
+	svc := NewService(repo)
+	got, err := svc.Summary(context.Background(), Window24h, GroupByMachine, now)
+	require.NoError(t, err)
+
+	require.Len(t, got.Breakdown, 1)
+	assert.Equal(t, "install-orphan", got.Breakdown[0].Key, "must fall back to the raw install_id, never a blank key")
+	assert.Empty(t, got.Breakdown[0].RawKey, "no substitution happened, so there is no separate raw value")
+}
+
+// TestService_Summary_GroupByActor_NeverConsultsMachineHostnames proves
+// the substitution pass is scoped to group_by=machine only — a
+// group_by=actor request must not even call MachineHostnames, let alone
+// let it affect the breakdown keys.
+func TestService_Summary_GroupByActor_NeverConsultsMachineHostnames(t *testing.T) {
+	repo := newFakeRepo()
+	repo.hostnamesErr = errors.New("must not be called")
+	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	repo.events = []Event{ev("freya", "p1", "install-1", 100, 0, 0, 0, 1.0)}
+	repo.events[0].CreatedAt = now.Add(-1 * time.Hour)
+
+	svc := NewService(repo)
+	got, err := svc.Summary(context.Background(), Window24h, GroupByActor, now)
+	require.NoError(t, err)
+	assert.Equal(t, "freya", got.Breakdown[0].Key)
+}
+
+func TestService_Summary_GroupByMachine_HostnamesRepoError_Propagates(t *testing.T) {
+	repo := newFakeRepo()
+	repo.hostnamesErr = errors.New("db down")
+	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	repo.events = []Event{ev("freya", "p1", "install-1", 100, 0, 0, 0, 1.0)}
+	repo.events[0].CreatedAt = now.Add(-1 * time.Hour)
+
+	svc := NewService(repo)
+	_, err := svc.Summary(context.Background(), Window24h, GroupByMachine, now)
+	assert.ErrorIs(t, err, repo.hostnamesErr)
 }

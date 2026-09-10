@@ -29,12 +29,23 @@ interface DisplayRow {
 }
 
 /**
- * Builds each row's display label. Only `path` gets the contract's own
- * shortening treatment (basename, collision walk-up, machine fallback) —
- * `actor`/`machine` keys are rendered as their raw value, same as the
- * mockup shows (an actor name, a machine's install_id).
+ * Builds each row's display label. `path` gets the contract's own
+ * shortening treatment (basename, collision walk-up, machine fallback).
+ * `machine` (story-1/ticket-18) shows the API's `key` (already the
+ * hostname, not the raw install_id — the BFF's own substitution, not
+ * this component's job) as the label, with `raw_key` (the install_id)
+ * as the tooltip when present — same "shortened label, full value still
+ * reachable via tooltip" pattern as `path` (contract's "machine label"
+ * rule). `raw_key` is absent when the BFF never substituted anything
+ * (the contract's own no-machines-row fallback case: `key` is already
+ * the raw install_id there), so the tooltip falls back to `key` itself
+ * rather than showing nothing. `actor` keys are rendered as their raw
+ * value, same as the mockup shows.
  */
 function toDisplayRows(groupBy: UsageGroupBy, rows: UsageBreakdownRow[]): DisplayRow[] {
+  if (groupBy === "machine") {
+    return rows.map((r) => ({ key: r.key, label: r.key, title: r.raw_key ?? r.key, tokens: r.tokens, cost: r.cost }));
+  }
   if (groupBy !== "path") {
     return rows.map((r) => ({ key: r.key, label: r.key, title: r.key, tokens: r.tokens, cost: r.cost }));
   }
