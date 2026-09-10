@@ -58,7 +58,7 @@ export default function Header() {
         >
           <Gauge className="size-4" />
           {/* Hide text on mobile, show on md+ */}
-          <span className="hidden lg:inline">my-token</span>
+          <span className="hidden lg:inline">My Token</span>
         </Link>
 
         {/* Desktop nav links */}
