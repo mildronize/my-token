@@ -9,16 +9,18 @@ import { useQuery } from "@tanstack/react-query";
 import { bffFetch } from "~/lib/api/client";
 import type { components } from "~/lib/api/bff-schema.gen";
 
-export type UsageWindow = "5h" | "24h" | "today" | "week" | "month" | "lifetime";
+export type UsageWindow = "5h" | "24h" | "today" | "week" | "month" | "year" | "lifetime";
 export type UsageGroupBy = "actor" | "path" | "machine";
 
-// FIXED_WINDOWS is exactly GET /usage/windows' own five rows, in the
-// contract's own order — the console's time-window tabs render this set
-// (a "lifetime" tab makes no sense as a *tab*, since every one of the
-// other five already answers "since when" relative to now; lifetime only
-// exists as the one summary tile that needs an unbounded range —
-// ~/app/usage/UsagePage.tsx's own doc comment says more).
-export const FIXED_WINDOWS: UsageWindow[] = ["5h", "24h", "today", "week", "month"];
+// FIXED_WINDOWS is exactly GET /usage/windows' own seven rows, in the
+// contract's own order — the console's time-window tabs render this set.
+// story-1/ticket-20 grew this from five to seven and made both `year`
+// and `lifetime` real, selectable tabs, reopening ticket 14's own
+// "lifetime is tab-only-tile, never a tab" call (that call's reasoning —
+// a "lifetime" tab makes no sense since every other window already
+// answers "since when" relative to now — turned out not to be what was
+// wanted; see ticket-20's own report).
+export const FIXED_WINDOWS: UsageWindow[] = ["5h", "24h", "today", "week", "month", "year", "lifetime"];
 
 export type UsageTotals = components["schemas"]["UsageTotals"];
 export type UsageBreakdownRow = components["schemas"]["UsageBreakdownRow"];
@@ -40,7 +42,7 @@ export function useUsageSummaryQuery(window: UsageWindow, groupBy: UsageGroupBy)
   });
 }
 
-/** GET /api/bff/usage/windows — the fixed 5h/24h/today/week/month table. */
+/** GET /api/bff/usage/windows — the fixed 5h/24h/today/week/month/year/lifetime table. */
 export function useUsageWindowsQuery() {
   return useQuery({
     queryKey: usageWindowsQueryKey,

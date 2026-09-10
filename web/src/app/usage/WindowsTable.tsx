@@ -1,4 +1,5 @@
-// story-1/ticket-14: the fixed 5h/24h/today/week/month table, backed by
+// story-1/ticket-14: the fixed 5h/24h/today/week/month/year/lifetime
+// table (story-1/ticket-20 grew this from five rows to seven), backed by
 // GET /api/bff/usage/windows.
 import { formatCost, formatInt } from "~/lib/format";
 import type { UsageWindowRow } from "~/lib/usage";

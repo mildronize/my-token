@@ -17,7 +17,9 @@
 //     the whole window's event set, independent of the grouping
 //     dimension, verified by TestAggregate_ReportingInstalls_
 //     IsIndependentOfGroupByDimension).
-//   - windowsTable (GET /usage/windows): the fixed five-row table.
+//   - windowsTable (GET /usage/windows): the fixed seven-row table
+//     (story-1/ticket-20: grew from five rows to seven — year and
+//     lifetime are now both real, selectable tabs too).
 //
 // Known gap, flagged rather than worked around: the approved mockup's
 // top bar also shows a "host" pill (e.g. `host thw-home`). No hostname

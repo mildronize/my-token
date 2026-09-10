@@ -164,7 +164,7 @@ func (s *Service) UpsertMachine(ctx context.Context, installID, hostname string,
 }
 
 // WindowTotals is one row of GET /api/bff/usage/windows' fixed table —
-// Window names which of the five fixed ranges this row covers, Totals is
+// Window names which of the fixed ranges this row covers, Totals is
 // that range's turns/tokens/cost (no group_by on this endpoint at all,
 // contract's API surface section).
 type WindowTotals struct {
@@ -173,9 +173,10 @@ type WindowTotals struct {
 }
 
 // Windows backs GET /api/bff/usage/windows: one row per entry in the
-// package-level Windows slice (summary.go), in that fixed order, each
-// computed the same way Summary computes a single window's totals — this
-// just loops over all five instead of taking one from the caller.
+// package-level Windows slice (summary.go — story-1/ticket-20: now seven
+// entries, 5h/24h/today/week/month/year/lifetime), in that fixed order,
+// each computed the same way Summary computes a single window's totals —
+// this just loops over all of them instead of taking one from the caller.
 func (s *Service) Windows(ctx context.Context, now time.Time) ([]WindowTotals, error) {
 	rows := make([]WindowTotals, 0, len(Windows))
 	for _, w := range Windows {

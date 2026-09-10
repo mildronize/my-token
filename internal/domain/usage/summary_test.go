@@ -20,6 +20,7 @@ func TestParseWindow_ValidValues(t *testing.T) {
 		{"today", WindowToday},
 		{"week", WindowWeek},
 		{"month", WindowMonth},
+		{"year", WindowYear},
 		{"lifetime", WindowLifetime},
 	} {
 		got, ok := ParseWindow(tc.in)
@@ -140,6 +141,56 @@ func TestWindowBounds_NonUTCNowIsNormalizedToUTCFirst(t *testing.T) {
 	assert.Equal(t, now.UTC(), end)
 }
 
+// --- WindowBounds: calendar-anchored window (year) ---------------------
+// story-1/ticket-20: same calendar-boundary style as today/week/month
+// above, anchored at Jan 1 00:00 UTC of the current year rather than a
+// rolling 365-day lookback.
+
+func TestWindowBounds_Year_StartsAtJan1UTCOfTheCurrentYear(t *testing.T) {
+	now := time.Date(2026, 9, 10, 23, 59, 59, 0, time.UTC)
+	start, end, err := WindowBounds(WindowYear, now)
+	require.NoError(t, err)
+	assert.Equal(t, now, end)
+	assert.Equal(t, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), start)
+}
+
+// Jan 1st itself is the start of its own year — zero days back, not
+// treated as "last year's Jan 1" (an off-by-one that would otherwise
+// silently include an extra year), mirroring
+// TestWindowBounds_Week_OnAMondayStartsToday's own reasoning for week.
+func TestWindowBounds_Year_OnJan1stItselfStartsThatSameInstant(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 1, 0, time.UTC)
+	start, _, err := WindowBounds(WindowYear, now)
+	require.NoError(t, err)
+	assert.Equal(t, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), start)
+}
+
+// A moment right at the very end of December must not leak into next
+// year's bucket — the widest possible offset "year" has to get right,
+// mirroring TestWindowBounds_Week_OnASundayGoesBackSixDays' own reasoning
+// for week.
+func TestWindowBounds_Year_OnDec31stStillAnchorsToJan1stOfTheSameYear(t *testing.T) {
+	now := time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC)
+	start, _, err := WindowBounds(WindowYear, now)
+	require.NoError(t, err)
+	assert.Equal(t, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), start)
+}
+
+// Mirrors TestWindowBounds_NonUTCNowIsNormalizedToUTCFirst, but the
+// UTC-vs-local mismatch straddles a year boundary, not just a day
+// boundary: 2026-01-01 01:00 +07:00 is 2025-12-31 18:00 UTC — a different
+// calendar *year*. "year" must anchor to the UTC year, not the input's
+// own local year, or this would wrongly start at 2026-01-01 instead of
+// 2025-01-01.
+func TestWindowBounds_Year_NonUTCNowNearYearBoundaryIsNormalizedToUTCFirst(t *testing.T) {
+	loc := time.FixedZone("UTC+7", 7*60*60)
+	now := time.Date(2026, 1, 1, 1, 0, 0, 0, loc)
+	start, end, err := WindowBounds(WindowYear, now)
+	require.NoError(t, err)
+	assert.Equal(t, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), start)
+	assert.Equal(t, now.UTC(), end)
+}
+
 // TestWindowBounds_Lifetime_HasNoLeftBoundWithinPlausibleRange proves
 // WindowLifetime's start is comfortably before any real usage_events row
 // could exist — the additive tile-only window (see WindowLifetime's own
@@ -152,14 +203,15 @@ func TestWindowBounds_Lifetime_HasNoLeftBoundWithinPlausibleRange(t *testing.T) 
 	assert.True(t, start.Before(time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)))
 }
 
-// TestWindows_DoesNotIncludeLifetime proves GET /usage/windows' own fixed
-// table stays exactly the contract's five, unaffected by WindowLifetime
-// being a valid ParseWindow value elsewhere.
-func TestWindows_DoesNotIncludeLifetime(t *testing.T) {
-	for _, w := range Windows {
-		assert.NotEqual(t, WindowLifetime, w)
-	}
-	assert.Len(t, Windows, 5)
+// TestWindows_ListsAllSevenFixedWindowsInOrder proves GET /usage/windows'
+// own fixed table is exactly the contract's seven windows (story-1/
+// ticket-20 grew this from five to seven — year and lifetime are now
+// both real, selectable tabs, reopening ticket 14's "lifetime is
+// tab-only-tile, never a tab" call), in the exact stated order.
+func TestWindows_ListsAllSevenFixedWindowsInOrder(t *testing.T) {
+	assert.Equal(t, []Window{
+		Window5h, Window24h, WindowToday, WindowWeek, WindowMonth, WindowYear, WindowLifetime,
+	}, Windows)
 }
 
 func TestWindowBounds_UnknownWindow_Errors(t *testing.T) {

@@ -304,7 +304,7 @@ func TestGetUsageWindows_EachRowReflectsItsOwnRange(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 
 	got := decodeUsageWindows(t, rec)
-	require.Len(t, got.Windows, 5)
+	require.Len(t, got.Windows, 7)
 
 	byWindow := map[string]bffapi.UsageWindowRow{}
 	for _, w := range got.Windows {
@@ -315,6 +315,28 @@ func TestGetUsageWindows_EachRowReflectsItsOwnRange(t *testing.T) {
 	assert.Equal(t, int64(100), byWindow["5h"].Tokens)
 	assert.Equal(t, int64(2), byWindow["24h"].Turns, "both events fall inside a rolling 24h window")
 	assert.Equal(t, int64(300), byWindow["24h"].Tokens)
+}
+
+// TestGetUsageWindows_ReturnsSevenRowsInOrder is story-1/ticket-20's own
+// core acceptance test for this endpoint: the fixed table grew from five
+// rows to seven (year and lifetime are now real, selectable tabs), and
+// must come back in exactly the stated order — not just as a set of
+// seven unordered rows.
+func TestGetUsageWindows_ReturnsSevenRowsInOrder(t *testing.T) {
+	router, session, _ := newBFFRouterForUsage(t)
+
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/usage/windows", session, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	got := decodeUsageWindows(t, rec)
+	require.Len(t, got.Windows, 7)
+
+	wantOrder := []string{"5h", "24h", "today", "week", "month", "year", "lifetime"}
+	gotOrder := make([]string, len(got.Windows))
+	for i, w := range got.Windows {
+		gotOrder[i] = string(w.Window)
+	}
+	assert.Equal(t, wantOrder, gotOrder)
 }
 
 func TestGetUsageWindows_MissingSession_Unauthorized(t *testing.T) {
@@ -329,7 +351,7 @@ func TestGetUsageWindows_NoEvents_AllZero(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 
 	got := decodeUsageWindows(t, rec)
-	require.Len(t, got.Windows, 5)
+	require.Len(t, got.Windows, 7)
 	for _, w := range got.Windows {
 		assert.Equal(t, int64(0), w.Turns, w.Window)
 		assert.Equal(t, int64(0), w.Tokens, w.Window)
