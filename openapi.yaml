@@ -201,6 +201,42 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+  /usage-events/batch:
+    post:
+      operationId: ingestUsageEventsBatch
+      summary: Ingest a batch of usage events reported by a collector install.
+      description: >
+        story-1/ticket-11's core ingestion endpoint. Idempotent on `id`
+        (`message.id` — ticket 9's dedup key, deliberately not the source
+        JSONL record's own `uuid`): a resend of an id already ingested
+        changes nothing. `cost` and `source` are never accepted from the
+        client at all — `UsageEventInput` has no properties for either and
+        `additionalProperties: false`, so a client that sends them gets a
+        `validation_error` rather than having the value silently accepted
+        and ignored, matching this surface's existing convention for a
+        stray server-controlled field (compare `CreateTodoRequest`
+        rejecting `done`). The server computes `cost` (the ported pricing
+        table) and always sets `source: "claude_code"` itself.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IngestUsageEventsBatchRequest"
+      responses:
+        "201":
+          description: >
+            The batch was processed — `inserted` may be less than
+            `received` when some ids were already ingested by a prior
+            call (idempotent resend).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestUsageEventsBatchResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   /keys:
     get:
       operationId: listKeys
@@ -508,6 +544,109 @@ components:
           description: >
             field_changed — which field `to` changes: `title` |
             `priority` | `dueDate`.
+    UsageEventInput:
+      type: object
+      additionalProperties: false
+      description: >
+        story-1/ticket-11 — one turn's reported usage (contract's Data
+        model: one row per unique `message.id` carrying a `usage` dict,
+        never one per JSONL line — ticket 9). Field names match the
+        contract's own wire shape verbatim (snake_case — the underlying
+        `usage` dict's own key names), not this surface's usual camelCase
+        convention (`assigneeId`, `dueDate`) — a deliberate exception,
+        since the contract fixes this exact shape and ticket 12's future
+        collector must match it. No `cost`/`source` properties exist here
+        at all, and `additionalProperties: false` — the server computes
+        both itself and never accepts either from the client (see this
+        path's own description).
+      required:
+        [
+          id,
+          session_id,
+          actor,
+          path,
+          machine,
+          model,
+          input_tokens,
+          output_tokens,
+          cache_read_input_tokens,
+          cache_creation_input_tokens,
+          timestamp,
+        ]
+      properties:
+        id:
+          type: string
+          description: >
+            The idempotency key — `message.id` (ticket 9), never the
+            source JSONL record's own `uuid`.
+        session_id:
+          type: string
+        actor:
+          type: string
+          description: >
+            Which crew-home produced this session (contract: derived from
+            a `.typ-crews/<name>`-equivalent launch-directory pattern) —
+            a domain fact about the reported session, not an identity
+            claim about the caller of this endpoint (I1 governs the
+            latter only; this field is nested inside `events`, not a
+            top-level request field, so `RejectActorFields` — which only
+            inspects top-level body keys — never sees it).
+        path:
+          type: string
+        machine:
+          type: string
+          description: The reporting collector's own install_id (UUID).
+        model:
+          type: string
+        input_tokens:
+          type: integer
+          format: int64
+        output_tokens:
+          type: integer
+          format: int64
+        cache_read_input_tokens:
+          type: integer
+          format: int64
+        cache_creation_input_tokens:
+          type: integer
+          format: int64
+        timestamp:
+          type: string
+          format: date-time
+          description: >
+            When the turn actually happened, per the collector's own
+            transcript read — stored as `created_at`. Deliberately
+            client-supplied (unlike `cost`/`source`): the collector
+            reports usage after the fact, sometimes with a real delay, so
+            "when this was ingested" would be the wrong value here.
+    IngestUsageEventsBatchRequest:
+      type: object
+      additionalProperties: false
+      required: [install_id, hostname, events]
+      properties:
+        install_id:
+          type: string
+        hostname:
+          type: string
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/UsageEventInput"
+    IngestUsageEventsBatchResponse:
+      type: object
+      required: [received, inserted]
+      properties:
+        received:
+          type: integer
+          format: int64
+          description: How many events this batch named, duplicates included.
+        inserted:
+          type: integer
+          format: int64
+          description: >
+            How many were newly written. `received - inserted` is exactly
+            how many ids this batch named were already ingested by a
+            prior call — an idempotent resend reports `inserted: 0`.
     Error:
       type: object
       required: [error]

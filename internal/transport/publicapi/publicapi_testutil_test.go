@@ -19,6 +19,7 @@ import (
 
 	"github.com/mildronize/my-template/internal/api"
 	"github.com/mildronize/my-template/internal/domain/todo"
+	"github.com/mildronize/my-template/internal/domain/usage"
 	"github.com/mildronize/my-template/internal/identity"
 )
 
@@ -77,12 +78,14 @@ type compositeServer struct {
 	MeServer
 	*KeysServer
 	*TodoServer
+	*UsageServer
 }
 
 // newIntegrationRouter builds a full /api/v1 stack — RejectActorFields,
 // RequireActor, the openapi.yaml request validator, then
 // api.RegisterHandlers — against a real temp-file SQLite database (not a
-// mock), for todo CRUD + ownership-scoping integration tests.
+// mock), for todo CRUD + ownership-scoping integration tests, and
+// story-1/ticket-11's usage-events ingestion tests (usage_handler_test.go).
 func newIntegrationRouter(t *testing.T) (*gin.Engine, *sql.DB) {
 	t.Helper()
 	conn := newTestDB(t)
@@ -91,6 +94,7 @@ func newIntegrationRouter(t *testing.T) (*gin.Engine, *sql.DB) {
 	identitySvc := identity.NewService(identityRepo, identityRepo, nil, nil)
 
 	todoSvc := todo.NewService(todo.NewRepo(conn))
+	usageSvc := usage.NewService(usage.NewRepo(conn))
 
 	validator, err := api.RequestValidator()
 	require.NoError(t, err)
@@ -99,8 +103,9 @@ func newIntegrationRouter(t *testing.T) (*gin.Engine, *sql.DB) {
 	group := router.Group("/api/v1")
 	group.Use(RejectActorFields(), RequireActor(identitySvc), validator)
 	api.RegisterHandlers(group, compositeServer{
-		KeysServer: NewKeysServer(identitySvc),
-		TodoServer: NewTodoServer(todoSvc),
+		KeysServer:  NewKeysServer(identitySvc),
+		TodoServer:  NewTodoServer(todoSvc),
+		UsageServer: NewUsageServer(usageSvc),
 	})
 
 	return router, conn

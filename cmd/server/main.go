@@ -32,6 +32,7 @@ import (
 	"github.com/mildronize/my-template/internal/api"
 	"github.com/mildronize/my-template/internal/bffapi"
 	"github.com/mildronize/my-template/internal/domain/todo"
+	"github.com/mildronize/my-template/internal/domain/usage"
 	"github.com/mildronize/my-template/internal/identity"
 	"github.com/mildronize/my-template/internal/platform"
 	"github.com/mildronize/my-template/internal/transport/bff"
@@ -107,6 +108,7 @@ func run() error {
 func buildHandler(ctx context.Context, cfg *platform.Config, db *sql.DB, logger *slog.Logger, distFS fs.FS) (http.Handler, error) {
 	repo := identity.NewRepo(db)
 	todoSvc := todo.NewService(todo.NewRepo(db))
+	usageSvc := usage.NewService(usage.NewRepo(db))
 
 	// --- publicapi ----------------------------------------------------
 	apiRouter := platform.NewRouter(logger)
@@ -115,7 +117,7 @@ func buildHandler(ctx context.Context, cfg *platform.Config, db *sql.DB, logger 
 	if err != nil {
 		return nil, fmt.Errorf("wiring identity module: %w", err)
 	}
-	if err := wirePublicAPI(apiV1, todoSvc, identitySvc); err != nil {
+	if err := wirePublicAPI(apiV1, todoSvc, usageSvc, identitySvc); err != nil {
 		return nil, fmt.Errorf("wiring public API: %w", err)
 	}
 
@@ -201,20 +203,25 @@ type apiServer struct {
 	publicapi.MeServer
 	*publicapi.KeysServer
 	*publicapi.TodoServer
+	*publicapi.UsageServer
 }
 
 var _ api.ServerInterface = apiServer{}
 
 // wirePublicAPI builds the openapi.yaml request validator and every piece
 // of internal/transport/publicapi's route-level API surface (identity's
-// keys endpoints, internal/domain/todo's CRUD), then registers all of it,
-// identity's GetMe included, on apiV1 in one call. The validator is
-// mounted after RejectActorFields/RequireActor (see wireIdentity) so a
-// request is authenticated before its payload shape is validated, not the
-// other way around. todoSvc is built once by buildHandler and shared with
-// wireBFF's own GET / handler (ARCHITECTURE.md's shared-service-layer
-// rule — one todo.Service instance, not two).
-func wirePublicAPI(apiV1 *gin.RouterGroup, todoSvc *todo.Service, identitySvc *identity.Service) error {
+// keys endpoints, internal/domain/todo's CRUD, story-1/ticket-11's usage
+// ingestion), then registers all of it, identity's GetMe included, on
+// apiV1 in one call. The validator is mounted after RejectActorFields/
+// RequireActor (see wireIdentity) so a request is authenticated before
+// its payload shape is validated, not the other way around. todoSvc/
+// usageSvc are each built once by buildHandler; todoSvc is additionally
+// shared with wireBFF's own GET / handler (ARCHITECTURE.md's
+// shared-service-layer rule — one todo.Service instance, not two).
+// usageSvc has no bff-surface counterpart (out of this story's scope —
+// ticket 14 owns the console read side, over its own /api/bff endpoints,
+// not this ingestion service directly).
+func wirePublicAPI(apiV1 *gin.RouterGroup, todoSvc *todo.Service, usageSvc *usage.Service, identitySvc *identity.Service) error {
 	validator, err := api.RequestValidator()
 	if err != nil {
 		return fmt.Errorf("building openapi request validator: %w", err)
@@ -222,9 +229,10 @@ func wirePublicAPI(apiV1 *gin.RouterGroup, todoSvc *todo.Service, identitySvc *i
 	apiV1.Use(validator)
 
 	api.RegisterHandlers(apiV1, apiServer{
-		MeServer:   publicapi.MeServer{},
-		KeysServer: publicapi.NewKeysServer(identitySvc),
-		TodoServer: publicapi.NewTodoServer(todoSvc),
+		MeServer:    publicapi.MeServer{},
+		KeysServer:  publicapi.NewKeysServer(identitySvc),
+		TodoServer:  publicapi.NewTodoServer(todoSvc),
+		UsageServer: publicapi.NewUsageServer(usageSvc),
 	})
 
 	return nil

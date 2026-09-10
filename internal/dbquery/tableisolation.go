@@ -58,10 +58,11 @@ import (
 // AssertQueryFileReferencesOnlyOwnTable), not a silent pass — a fork that
 // adds a table and forgets to declare its owner finds out immediately.
 var TableOwnership = map[string]string{
-	"users":       "identity",
-	"api_keys":    "identity",
-	"todos":       "todo",
-	"todo_events": "todo",
+	"users":        "identity",
+	"api_keys":     "identity",
+	"todos":        "todo",
+	"todo_events":  "todo",
+	"usage_events": "usage",
 }
 
 // ReadOnlyGrant is the only sanctioned way for a query file to reference

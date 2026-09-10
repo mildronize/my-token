@@ -287,6 +287,12 @@ func perDomainModuleScopePackages(root string) map[string]string {
 		// single-seam-identity-read properties both apply to it
 		// directly.
 		"todo": filepath.Join(root, "internal", "domain", "todo"),
+		// story-1/ticket-11: usage_events is collector-reported, not
+		// owned by an authenticated user (I3's reach narrows away, the
+		// same way it already did for todo — see usage/repo_test.go's
+		// own TestI3_ test), but I4's "one repo, one table" property
+		// still applies directly (usage/repo_test.go's TestI4_ test).
+		"usage": filepath.Join(root, "internal", "domain", "usage"),
 		// internal/identity is deliberately not under internal/domain/
 		// (ARCHITECTURE.md's milestone-2 decision) but owns the
 		// users/api_keys tables I4 is actually about, and I3's

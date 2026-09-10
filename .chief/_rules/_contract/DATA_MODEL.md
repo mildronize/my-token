@@ -115,6 +115,32 @@ my-task's own I3 exactly, including its enforcement shape: application-level
 trigger or constraint. See `INVARIANTS.md` I17 for why not going further
 than the named source is itself a deliberate choice, not an oversight.
 
+## `usage_events` (story-1/ticket-11, new — collector-reported usage ledger)
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | text, pk | = the reporting collector's `message.id` (not the source JSONL record's own `uuid`) — the idempotency key. `INSERT OR IGNORE` on this column is the whole dedup mechanism; no separate unique index needed |
+| `session_id` | text, not null | |
+| `actor` | text, not null | which crew-home produced the reported session (a `.typ-crews/<name>`-equivalent launch-directory match) — a domain fact about the session, not an identity claim about the caller of this endpoint |
+| `path` | text, not null | |
+| `machine` | text, not null | the reporting collector's own `install_id` (UUID) |
+| `model` | text, not null | |
+| `input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens` | integer, not null | read directly off the deduped `usage` dict, never summed into each other |
+| `cost` | real, not null | computed server-side via a ported pricing table (pure function) — never accepted from the client |
+| `source` | text, not null | fixed `"claude_code"` for this story — always server-set, never accepted from the client |
+| `created_at` | timestamp, not null | the turn's own reported time (client-supplied `timestamp`), not when it was ingested |
+
+Indexes: `actor`, `path`, `machine`, `created_at` (every dimension the
+console's own group-by/window queries need). No foreign key to
+`users`/`api_keys`: this table is reported wholesale by one
+machine-authenticating collector, not owned by (or scoped to) the human/
+agent identity that key belongs to — I3 does not apply here, the same way
+it stopped applying to `todos` above.
+
+**No `UPDATE`/`DELETE` anywhere** — write-once by construction, same
+append-only shape as `todo_events`, just without a `seq`/timeline concept
+(one row per turn is the whole model, no ordering between rows to track).
+
 ## BFF session — no new table, decided minimal on purpose
 
 The owner login (milestone-2 item 3) needs *some* session mechanism once

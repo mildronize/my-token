@@ -58,6 +58,7 @@ type Querier interface {
 	// query only ever appends, never mutates (I17: append-only, no
 	// exceptions).
 	InsertTodoEvent(ctx context.Context, arg InsertTodoEventParams) (TodoEvent, error)
+	InsertUsageEventIgnoreDuplicate(ctx context.Context, arg InsertUsageEventIgnoreDuplicateParams) (int64, error)
 	ListAPIKeysByOwner(ctx context.Context, userID string) ([]ApiKey, error)
 	// Every active user, either role -- the assignee-picker's own source
 	// (GET /api/bff/users), mirroring my-task's user.ts router exactly

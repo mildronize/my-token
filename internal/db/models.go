@@ -43,6 +43,22 @@ type TodoEvent struct {
 	CreatedAt       time.Time      `json:"created_at"`
 }
 
+type UsageEvent struct {
+	ID                       string    `json:"id"`
+	SessionID                string    `json:"session_id"`
+	Actor                    string    `json:"actor"`
+	Path                     string    `json:"path"`
+	Machine                  string    `json:"machine"`
+	Model                    string    `json:"model"`
+	InputTokens              int64     `json:"input_tokens"`
+	OutputTokens             int64     `json:"output_tokens"`
+	CacheReadInputTokens     int64     `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int64     `json:"cache_creation_input_tokens"`
+	Cost                     float64   `json:"cost"`
+	Source                   string    `json:"source"`
+	CreatedAt                time.Time `json:"created_at"`
+}
+
 type User struct {
 	ID         string         `json:"id"`
 	Handle     string         `json:"handle"`

@@ -46,6 +46,12 @@ milestone (nothing here — only this surface's code location moved, from
   issuance and rotation are both CLI-only (milestone-2 `_contract/API.md`'s
   "Public API — unchanged this milestone" explains why rotation
   specifically can't be a safe HTTP endpoint).
+- **`POST /api/v1/usage-events/batch` (story-1/ticket-11) is a deliberate
+  exception to this surface's usual camelCase field naming** (`assigneeId`,
+  `dueDate`, `clientRequestId`) — its request body uses snake_case
+  (`session_id`, `input_tokens`, ...) verbatim, matching the collector's
+  own wire contract (the underlying Anthropic `usage` dict's own key
+  names) rather than being renamed to fit this surface's convention.
 
 ## Error shape
 
@@ -124,3 +130,20 @@ see it needs rotating.
 Sets `revoked_at`. Owner-scoped, same 404 rule as todos. Deliberately no
 `POST /api/v1/keys` and no rotation endpoint — issuance and rotation are
 both CLI-only (`docs/DEPLOY-REQUIREMENTS.md` covers the scripts).
+
+### `POST /api/v1/usage-events/batch` (story-1/ticket-11)
+
+Body: `{ "install_id": "…", "hostname": "…", "events": [{ "id", "session_id",
+"actor", "path", "machine", "model", "input_tokens", "output_tokens",
+"cache_read_input_tokens", "cache_creation_input_tokens", "timestamp" }] }`.
+
+Idempotent on `id` (`message.id` — never the source JSONL record's own
+`uuid`): a resend of an already-ingested batch changes nothing.
+`cost`/`source` have no request-body representation at all
+(`additionalProperties: false`) — sending either is a `validation_error`,
+not a value that gets silently accepted and ignored; the server always
+computes `cost` (a ported pricing table) and sets `source: "claude_code"`
+itself. No ownership scoping (I3 does not apply — this table has no
+per-caller "own" rows). Response: `{ "received": <int>, "inserted": <int> }`
+— `received - inserted` is how many of this batch's ids were already
+ingested by a prior call.
