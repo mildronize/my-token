@@ -138,3 +138,54 @@ func TestRun_TouchedPathsMajorityVoteBeatsSessionCwd(t *testing.T) {
 	assert.Equal(t, "/home/thw-home/gits/my-template", poster.posted[0].Path, "touched-path majority vote must win over the session's own never-drifting cwd")
 	assert.Equal(t, "luna", poster.posted[0].Actor, "actor stays cwd-derived — ticket 13 only changes path")
 }
+
+// TestRun_MultipleCrewHomesUnderOneScanRoot_AllFoundAndDistinctlyAttributed
+// is ticket 19's own regression test: earlier this session, a real
+// production collector run was manually pointed at a scan root
+// containing many crews' subdirectories, and a stale config file went
+// unnoticed for a full round-trip because nothing in this suite ever
+// exercised "one scan root containing multiple distinct crew-home
+// subdirectories" — every fixture before this one only ever covered one
+// session/crew at a time. Directory shape mirrors the real Claude Code
+// project-directory naming convention (cwd with "/" replaced by "-":
+// /home/x/.typ-crews/alice -> -home-x-.typ-crews-alice), with 3 distinct
+// crews nested under one single scan root (not 3 separate ScanPaths
+// entries — that multi-root case is already covered by
+// TestFindTranscriptFiles_MultipleScanPaths).
+func TestRun_MultipleCrewHomesUnderOneScanRoot_AllFoundAndDistinctlyAttributed(t *testing.T) {
+	root := t.TempDir()
+	crews := []string{"alice", "bob", "carol"}
+	for _, crew := range crews {
+		projectDir := filepath.Join(root, ".claude", "projects", "-home-x-.typ-crews-"+crew)
+		cwd := "/home/x/.typ-crews/" + crew
+		sessionID := "session-" + crew
+		writeFile(t, filepath.Join(projectDir, sessionID+".jsonl"),
+			usageLine("r1", "msg_"+crew, "claude-sonnet-4-5", "text", 10, 5, 0, 0, cwd, sessionID, "2026-09-10T12:00:00Z")+"\n")
+	}
+
+	poster := &fakePoster{}
+	cfg := Config{ScanPaths: []string{root}, InstallID: "install-abc"}
+	result, err := Run(cfg, filepath.Join(t.TempDir(), "state.json"), filepath.Join(t.TempDir(), "pathstore.db"), fakeResolver(""), "test-host", poster)
+	require.NoError(t, err)
+
+	require.Equal(t, 3, result.FilesScanned, "must find all 3 crews' transcript files under the one scan root, not just the first alphabetically or just one")
+	require.Len(t, poster.posted, 3)
+
+	actorBySession := map[string]string{}
+	for _, e := range poster.posted {
+		actorBySession[e.SessionID] = e.Actor
+	}
+	require.Len(t, actorBySession, 3, "all 3 sessions must be present")
+	assert.Equal(t, "alice", actorBySession["session-alice"])
+	assert.Equal(t, "bob", actorBySession["session-bob"])
+	assert.Equal(t, "carol", actorBySession["session-carol"])
+
+	// Each actor must be its own distinct value — not collapsed into one
+	// shared actor, and not just the first one repeated for all three.
+	seenActors := map[string]bool{}
+	for _, a := range actorBySession {
+		assert.False(t, seenActors[a], "actor %q must not repeat across distinct crew sessions", a)
+		seenActors[a] = true
+	}
+	assert.Len(t, seenActors, 3, "3 sessions must resolve to 3 distinct actors")
+}
