@@ -2,6 +2,7 @@ package publicapi
 
 import (
 	"database/sql"
+	"encoding/json"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -30,6 +31,28 @@ func usageLine(recordUUID, messageID, model, contentType string, input, output, 
 		`"content":[{"type":"` + contentType + `"}],` +
 		`"usage":{"input_tokens":` + itoa(input, 10) + `,"output_tokens":` + itoa(output, 10) +
 		`,"cache_read_input_tokens":` + itoa(cacheRead, 10) + `,"cache_creation_input_tokens":` + itoa(cacheCreation, 10) + `}}}`
+}
+
+// toolUseLine mirrors internal/collector's own test helper of the same
+// name (touchedpaths_test.go) — duplicated for the same reason usageLine
+// above is: unexported test-only code in a different package. Builds one
+// raw JSONL line carrying a single tool_use content block.
+func toolUseLine(t *testing.T, sessionID, toolName string, input map[string]any) string {
+	t.Helper()
+	inputJSON, err := json.Marshal(input)
+	require.NoError(t, err)
+
+	rec := map[string]any{
+		"sessionId": sessionID,
+		"message": map[string]any{
+			"content": []map[string]any{
+				{"type": "tool_use", "name": toolName, "input": json.RawMessage(inputJSON)},
+			},
+		},
+	}
+	line, err := json.Marshal(rec)
+	require.NoError(t, err)
+	return string(line)
 }
 
 // TestCollectorIntegration_RunsAgainstTicket11sRealEndpoint is ticket 12's
@@ -81,11 +104,12 @@ func TestCollectorIntegration_RunsAgainstTicket11sRealEndpoint(t *testing.T) {
 	}
 	client := collector.NewClient(server.URL, rawKey, cfg.InstallID, "test-host")
 	statePath := filepath.Join(t.TempDir(), "state.json")
+	pathStorePath := filepath.Join(t.TempDir(), "pathstore.db")
 
 	// Never-a-git-repo resolver — scanRoot is a plain temp dir, so the
 	// simple path method's real git-root fallback chain (path.go) is
 	// exercised for real here, not stubbed.
-	result, err := collector.Run(cfg, statePath, collector.RealGitRootResolver, "test-host", client)
+	result, err := collector.Run(cfg, statePath, pathStorePath, collector.RealGitRootResolver, "test-host", client)
 	require.NoError(t, err)
 
 	assert.Equal(t, 3, result.NewRowsFound, "msg_turn1's three content-block lines dedupe to 1, plus msg_turn2, plus the subagent's msg_subagent1 — 3 real turns, not 5 lines")
@@ -116,7 +140,7 @@ func TestCollectorIntegration_RunsAgainstTicket11sRealEndpoint(t *testing.T) {
 	// Re-running against the same fixture (and the same server/db) sends
 	// nothing new — ticket 12's own local sent-state tracking, on top of
 	// (not instead of) the server's own idempotency.
-	result2, err := collector.Run(cfg, statePath, collector.RealGitRootResolver, "test-host", client)
+	result2, err := collector.Run(cfg, statePath, pathStorePath, collector.RealGitRootResolver, "test-host", client)
 	require.NoError(t, err)
 	assert.Equal(t, 0, result2.NewRowsFound)
 	assert.Equal(t, 3, countUsageEventRows(t, conn), "row count must not grow on a re-run")
@@ -161,8 +185,9 @@ func TestCollectorIntegration_PathResolvesToRealGitRoot(t *testing.T) {
 	}
 	client := collector.NewClient(server.URL, rawKey, cfg.InstallID, "test-host")
 	statePath := filepath.Join(t.TempDir(), "state.json")
+	pathStorePath := filepath.Join(t.TempDir(), "pathstore.db")
 
-	result, err := collector.Run(cfg, statePath, collector.RealGitRootResolver, "test-host", client)
+	result, err := collector.Run(cfg, statePath, pathStorePath, collector.RealGitRootResolver, "test-host", client)
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.NewRowsFound)
 
@@ -173,6 +198,77 @@ func TestCollectorIntegration_PathResolvesToRealGitRoot(t *testing.T) {
 	require.NoError(t, conn.QueryRow(`SELECT path FROM usage_events WHERE id = ?`, "msg_git1").Scan(&gotPath))
 	assert.Equal(t, wantRoot, gotPath, "path must be the git toplevel, not the raw nested cwd")
 	assert.NotEqual(t, nestedCwd, gotPath, "a real git repo must NOT fall back to the raw cwd")
+}
+
+// TestCollectorIntegration_TouchedPathsMajorityVoteResolvesRealGitRoot is
+// ticket 13's own real-subprocess integration test: a session whose cwd
+// never drifts from a plain, non-git launch directory (the exact
+// luna/my-template pattern ticket 10 found), but whose tool_use records'
+// file_path/Bash `cd` targets point into a real temp git repo — proving
+// the whole extract -> cache -> vote -> ingest pipeline resolves `path`
+// to that repo's real toplevel via a genuine `git rev-parse` subprocess
+// call (collector.RealGitRootResolver, not an injected fake), and not the
+// session's own never-drifting, non-git cwd.
+func TestCollectorIntegration_TouchedPathsMajorityVoteResolvesRealGitRoot(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available on PATH")
+	}
+
+	router, conn := newIntegrationRouter(t)
+	_, rawKey := createAgentWithKey(t, conn, "collector-touched-paths-integration")
+	server := httptest.NewServer(router)
+	defer server.Close()
+
+	// Deliberately NOT t.TempDir() — that resolves under os.TempDir()
+	// ("/tmp" on this host), which ticket 13's own isScratchPath deny-list
+	// would (correctly) drop before ever attempting to git-root it. A real
+	// project touched by a real session is never under /tmp; this fixture
+	// must actually live somewhere else to prove the touched-paths method
+	// finds it, so it's created as a sibling of this test file instead and
+	// removed afterward.
+	repoRoot, err := os.MkdirTemp(".", "fixture-repo-not-scratch-*")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(repoRoot) })
+	repoRoot, err = filepath.Abs(repoRoot)
+	require.NoError(t, err)
+
+	require.NoError(t, exec.Command("git", "-C", repoRoot, "init", "-q").Run())
+	fileInRepo := filepath.Join(repoRoot, "AGENTS.md")
+	require.NoError(t, os.WriteFile(fileInRepo, []byte("# agents"), 0o644))
+
+	// A plain temp dir — never a git repo — playing the role of luna's
+	// never-drifting crew-home launch cwd (ticket 10's own finding: Bash's
+	// inline `cd` never updates the session-level cwd field at all).
+	launchCwd := t.TempDir()
+
+	scanRoot := t.TempDir()
+	sessionID := "fixture-session-touched"
+	writeFixture(t, filepath.Join(scanRoot, sessionID+".jsonl"), ""+
+		usageLine("r1", "msg_touched1", "claude-sonnet-4-5", "text", 10, 5, 0, 0, launchCwd, sessionID, "2026-09-10T12:00:00Z")+"\n"+
+		toolUseLine(t, sessionID, "Read", map[string]any{"file_path": fileInRepo})+"\n"+
+		toolUseLine(t, sessionID, "Bash", map[string]any{"command": "cd " + repoRoot + " && git status"})+"\n")
+
+	cfg := collector.Config{
+		ScanPaths: []string{scanRoot},
+		InstallID: "install-touched-paths-integration-test",
+		CoreURL:   server.URL,
+		APIKey:    rawKey,
+	}
+	client := collector.NewClient(server.URL, rawKey, cfg.InstallID, "test-host")
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	pathStorePath := filepath.Join(t.TempDir(), "pathstore.db")
+
+	result, err := collector.Run(cfg, statePath, pathStorePath, collector.RealGitRootResolver, "test-host", client)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.NewRowsFound)
+
+	wantRoot, err := collector.RealGitRootResolver(repoRoot)
+	require.NoError(t, err, "sanity check: the temp dir this test just `git init`'d must itself resolve as a git repo")
+
+	var gotPath string
+	require.NoError(t, conn.QueryRow(`SELECT path FROM usage_events WHERE id = ?`, "msg_touched1").Scan(&gotPath))
+	assert.Equal(t, wantRoot, gotPath, "touched-path majority vote must resolve to the real repo's toplevel via a genuine git subprocess call")
+	assert.NotEqual(t, launchCwd, gotPath, "must not fall back to the session's own never-drifting, non-git cwd")
 }
 
 func writeFixture(t *testing.T, path, content string) {

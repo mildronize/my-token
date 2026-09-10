@@ -112,6 +112,20 @@ func ExtractUsageRows(lines []string) ([]UsageRow, error) {
 // pipeline (collector.go); ExtractUsageRows itself stays file-agnostic
 // so its own tests (transcript_test.go) never touch disk.
 func ExtractUsageRowsFromFile(path string) ([]UsageRow, error) {
+	lines, err := ReadTranscriptLines(path)
+	if err != nil {
+		return nil, err
+	}
+	return ExtractUsageRows(lines)
+}
+
+// ReadTranscriptLines reads every line of path into memory. Shared by
+// ExtractUsageRowsFromFile (which only cares about usage-bearing lines)
+// and ticket 13's touched-paths extraction (touchedpaths.go), which needs
+// every line of a transcript file — including ones with no
+// message.usage at all — since a tool_use content block can appear on a
+// line ExtractUsageRows would otherwise skip entirely.
+func ReadTranscriptLines(path string) ([]string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -132,5 +146,5 @@ func ExtractUsageRowsFromFile(path string) ([]UsageRow, error) {
 		return nil, err
 	}
 
-	return ExtractUsageRows(lines)
+	return lines, nil
 }

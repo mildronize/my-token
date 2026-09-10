@@ -4,6 +4,19 @@
 // estimates a local cost, and reports batches to ticket 11's core
 // service (POST /api/v1/usage-events/batch).
 //
+// `path` attribution is ticket 13's full method (touchedpaths.go,
+// path.go, pathstore.go), upgraded in place from ticket 12's own simple
+// cwd-based method (still reachable — ResolveSessionPath — as the
+// fallback for a session with no real touched-path candidates at all):
+// extract every real filesystem path a session's tool calls touched,
+// drop /tmp scratch noise, git-root each one individually (cached in a
+// local SQLite file so a directory is never re-resolved via a `git`
+// subprocess call twice), and take the majority-vote winner by count —
+// not a literal common-directory/intersection across all of them, which
+// ticket 10's research found collapses to "/" the moment a session
+// legitimately touches more than one real tree (its own crew notes,
+// shared fleet memory, a second unrelated repo), which is normal.
+//
 // This lives under internal/ (not as a domain module — see
 // .chief/_rules/_standard/ARCHITECTURE.md) because it is not part of the
 // core HTTP service's request path at all: it never imports gin, is

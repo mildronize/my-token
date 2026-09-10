@@ -18,7 +18,12 @@
 // state file (<config>.state.json) tracks which message.ids this install
 // has already sent, purely as an optimization (the server is idempotent
 // on id regardless — ticket 11) so a re-run doesn't re-upload rows the
-// server would just no-op anyway.
+// server would just no-op anyway. A second sibling file
+// (<config>.pathstore.db, a local SQLite database) is ticket 13's own
+// path-attribution cache — every directory's known git-root, and each
+// session's running touched-path vote tally — so a re-run only parses
+// new transcript lines and never re-resolves a known directory's
+// git-root via a subprocess call twice.
 package main
 
 import (
@@ -53,6 +58,14 @@ func statePathFor(configPath string) string {
 	return configPath + ".state.json"
 }
 
+// pathStorePathFor derives ticket 13's local SQLite path-attribution
+// cache (git_root_cache + session_path_votes + session_scan_progress,
+// internal/collector/pathstore.go) from the config file's own path — a
+// sibling file, the same pattern statePathFor already uses.
+func pathStorePathFor(configPath string) string {
+	return configPath + ".pathstore.db"
+}
+
 func run(configPath string) error {
 	cfg, err := collector.LoadOrInitConfig(configPath)
 	if err != nil {
@@ -66,7 +79,7 @@ func run(configPath string) error {
 
 	client := collector.NewClient(cfg.CoreURL, cfg.APIKey, cfg.InstallID, hostname)
 
-	result, err := collector.Run(cfg, statePathFor(configPath), collector.RealGitRootResolver, hostname, client)
+	result, err := collector.Run(cfg, statePathFor(configPath), pathStorePathFor(configPath), collector.RealGitRootResolver, hostname, client)
 	if err != nil {
 		return fmt.Errorf("running collector: %w", err)
 	}

@@ -47,10 +47,11 @@ func TestRun_ScansExtractsAttributesAndPosts_ThenTracksSentState(t *testing.T) {
 		usageLine("r3", "msg_2", "claude-sonnet-4-5", "text", 200, 80, 0, 0, "/home/thw-home/.typ-crews/freya", "session-1", "2026-09-10T12:01:00Z")+"\n")
 
 	statePath := filepath.Join(t.TempDir(), "state.json")
+	pathStorePath := filepath.Join(t.TempDir(), "pathstore.db")
 	poster := &fakePoster{}
 
 	cfg := Config{ScanPaths: []string{root}, InstallID: "install-abc"}
-	result, err := Run(cfg, statePath, fakeResolver("/home/thw-home/gits/my-token"), "test-host", poster)
+	result, err := Run(cfg, statePath, pathStorePath, fakeResolver("/home/thw-home/gits/my-token"), "test-host", poster)
 	require.NoError(t, err)
 
 	assert.Equal(t, 2, result.NewRowsFound, "msg_1's two content-block lines must dedup to one row")
@@ -71,7 +72,7 @@ func TestRun_ScansExtractsAttributesAndPosts_ThenTracksSentState(t *testing.T) {
 	// A second run with the same fixture must find nothing new to send —
 	// the local sent-state file already has both message.ids.
 	poster2 := &fakePoster{}
-	result2, err := Run(cfg, statePath, fakeResolver("/home/thw-home/gits/my-token"), "test-host", poster2)
+	result2, err := Run(cfg, statePath, pathStorePath, fakeResolver("/home/thw-home/gits/my-token"), "test-host", poster2)
 	require.NoError(t, err)
 	assert.Equal(t, 0, result2.NewRowsFound)
 	assert.Empty(t, poster2.posted)
@@ -84,7 +85,7 @@ func TestRun_ActorUnknownFallsBackToUnknownMarker(t *testing.T) {
 
 	poster := &fakePoster{}
 	cfg := Config{ScanPaths: []string{root}, InstallID: "install-abc"}
-	_, err := Run(cfg, filepath.Join(t.TempDir(), "state.json"), fakeResolver("/home/thw-home/gits/some-repo"), "test-host", poster)
+	_, err := Run(cfg, filepath.Join(t.TempDir(), "state.json"), filepath.Join(t.TempDir(), "pathstore.db"), fakeResolver("/home/thw-home/gits/some-repo"), "test-host", poster)
 	require.NoError(t, err)
 	require.Len(t, poster.posted, 1)
 	assert.Equal(t, "(unknown)", poster.posted[0].Actor)
@@ -97,8 +98,43 @@ func TestRun_NotAGitRepoFallsBackToRawCwdForPath(t *testing.T) {
 
 	poster := &fakePoster{}
 	cfg := Config{ScanPaths: []string{root}, InstallID: "install-abc"}
-	_, err := Run(cfg, filepath.Join(t.TempDir(), "state.json"), fakeResolver(""), "test-host", poster)
+	_, err := Run(cfg, filepath.Join(t.TempDir(), "state.json"), filepath.Join(t.TempDir(), "pathstore.db"), fakeResolver(""), "test-host", poster)
 	require.NoError(t, err)
 	require.Len(t, poster.posted, 1)
 	assert.Equal(t, "/home/thw-home/.typ-crews/freya", poster.posted[0].Path)
+}
+
+// TestRun_TouchedPathsMajorityVoteBeatsSessionCwd is ticket 13's own
+// demoable/verifiable-on-its-own scenario, per the ticket's own text: "a
+// session whose cwd never drifts, but whose tool calls' file_path/Bash
+// targets consistently point elsewhere" (the exact luna/my-template
+// pattern ticket 10 found) — confirms Run's own `path` reflects the
+// majority-vote winner over the touched paths, not the session's launch
+// directory, end to end through the real pipeline (scan -> extract ->
+// tally -> resolve), not just the pure path.go functions in isolation.
+func TestRun_TouchedPathsMajorityVoteBeatsSessionCwd(t *testing.T) {
+	root := t.TempDir()
+	sessionID := "session-luna-like"
+	sessionFile := filepath.Join(root, sessionID+".jsonl")
+
+	// cwd never drifts from the crew home — but three Edit calls and one
+	// Bash `cd` all target a different real project tree.
+	writeFile(t, sessionFile, ""+
+		usageLine("r1", "msg_1", "claude-sonnet-4-5", "text", 10, 5, 0, 0, "/home/thw-home/.typ-crews/luna", sessionID, "2026-09-10T12:00:00Z")+"\n"+
+		toolUseLine(t, sessionID, "Edit", map[string]any{"file_path": "/home/thw-home/gits/my-template/AGENTS.md", "old_string": "a", "new_string": "b"})+"\n"+
+		toolUseLine(t, sessionID, "Edit", map[string]any{"file_path": "/home/thw-home/gits/my-template/README.md", "old_string": "a", "new_string": "b"})+"\n"+
+		toolUseLine(t, sessionID, "Bash", map[string]any{"command": "cd /home/thw-home/gits/my-template && git commit -m \"work\""})+"\n")
+
+	poster := &fakePoster{}
+	cfg := Config{ScanPaths: []string{root}, InstallID: "install-abc"}
+	resolver := fakeGitRootResolver(map[string]string{
+		"/home/thw-home/gits/my-template": "/home/thw-home/gits/my-template",
+	})
+
+	result, err := Run(cfg, filepath.Join(t.TempDir(), "state.json"), filepath.Join(t.TempDir(), "pathstore.db"), resolver, "test-host", poster)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.NewRowsFound)
+	require.Len(t, poster.posted, 1)
+	assert.Equal(t, "/home/thw-home/gits/my-template", poster.posted[0].Path, "touched-path majority vote must win over the session's own never-drifting cwd")
+	assert.Equal(t, "luna", poster.posted[0].Actor, "actor stays cwd-derived — ticket 13 only changes path")
 }
