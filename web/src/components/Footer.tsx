@@ -5,7 +5,7 @@
 // `import.meta.env.VITE_*` (https://vite.dev/guide/env-and-mode.html).
 // Everything else — the JSX, the dev-vs-real-commit branch — is unchanged.
 const commitSha = import.meta.env.VITE_COMMIT_SHA ?? "dev";
-const repoUrl = "https://github.com/mildronize/prompt-shelf";
+const repoUrl = "https://github.com/mildronize/my-token";
 
 export default function Footer() {
   const isdev = commitSha === "dev";
