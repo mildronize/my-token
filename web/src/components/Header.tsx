@@ -54,7 +54,7 @@ export default function Header() {
         {/* Logo pill */}
         <Link
           to="/"
-          className="inline-flex items-center gap-2 rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink)] no-underline shadow-[0_8px_24px_rgba(26,46,74,0.08)] sm:px-4 sm:py-2"
+          className="inline-flex items-center gap-2 rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink)] no-underline shadow-[0_8px_24px_rgba(36,29,18,0.08)] sm:px-4 sm:py-2"
         >
           <Gauge className="size-4" />
           {/* Hide text on mobile, show on md+ */}

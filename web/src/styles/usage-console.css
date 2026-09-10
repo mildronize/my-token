@@ -2,12 +2,21 @@
  * story-1/ticket-14: the usage console page's own styling, ported
  * verbatim (class names, colors, spacing) from the approved mockup
  * (https://claude.ai/code/artifact/c1382132-8662-490a-9e7a-8d7d8f20ea6d,
- * ticket 3's amber/gold-on-dark decision) — everything here is scoped
- * under `.usage-console` so it never leaks into the rest of the SPA's
- * own blue "lagoon" theme (globals.css). The mockup styled a standalone
- * page (`body`, unscoped `.topbar`/`.tile`/etc.); every such selector
- * below is rewritten as `.usage-console <selector>` so it only ever
- * applies inside UsagePage.tsx's own root element.
+ * ticket 3's amber/gold-on-dark decision). Everything here is scoped
+ * under `.usage-console` because this screen's own layout (topbar,
+ * tiles, windowtabs, breakdown panels) and type system (Sora/IBM Plex,
+ * index.html's second Google Fonts link) are specific to this one page
+ * — not because the color palette itself was ever meant to be unique to
+ * it.
+ *
+ * story-1/ticket-17 promoted this amber/gold palette to be the whole
+ * app's own theme (globals.css's `--sea-ink`/`--lagoon`/`--sand`/etc.
+ * tokens were recolored to the same amber/gold family, replacing the
+ * old blue "lagoon" theme app-wide). The `--uc-*` tokens below remain
+ * their own scoped set — a second, independently-valued expression of
+ * the same amber/gold palette, convenient for this page's own denser
+ * layout — not a competing theme; see globals.css's `:root` block for
+ * the app-wide token set every other screen uses.
  *
  * Follows the app's existing light/dark toggle (globals.css's
  * `:root[data-theme]` / `prefers-color-scheme` convention) rather than

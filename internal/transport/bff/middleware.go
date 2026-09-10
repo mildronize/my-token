@@ -64,6 +64,104 @@ func clearCookie(c *gin.Context, name string, secure bool) {
 	c.SetCookie(name, "", -1, "/", "", secure, true)
 }
 
+// loginErrorPage is the one server-rendered HTML page this whole service
+// draws (renderLoginError below is its only caller) — the login/logged-out
+// side of story-1/ticket-17's "one consistent amber/gold theme across the
+// whole app" (_contract/contract.md's "Frontend theme" section), so a user
+// mid-failed-login sees the same palette as every other screen rather than
+// bare unstyled markup. The exact hex values below are hand-kept in sync
+// with web/src/styles/globals.css's light/dark `:root` blocks and
+// web/src/styles/usage-console.css's `--uc-accent`/`--uc-accent-strong` —
+// this page has no build step of its own (deliberately: ticket-17's own
+// text says "inline <style> ... is fine for what's likely a small number
+// of simple HTML pages — don't over-engineer a full build pipeline"), so
+// there is no way to share the SPA's actual CSS custom properties here;
+// keep these four values (light bg/card/text/accent, dark bg/card/text/
+// accent) matching globals.css's `:root` / `:root[data-theme="dark"]`
+// blocks if that palette ever changes again.
+const loginErrorPage = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Login failed</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f0e4;
+    --card: #faf7ef;
+    --border: rgba(36, 29, 18, 0.14);
+    --text: #241d12;
+    --text-soft: #7c7261;
+    --accent: #b8790a;
+    --accent-strong: #8f5c06;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14110d;
+      --card: #1e1912;
+      --border: rgba(255, 200, 87, 0.16);
+      --text: #ede6d8;
+      --text-soft: #a89c87;
+      --accent: #f0a202;
+      --accent-strong: #ffc857;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  .card {
+    max-width: 26rem;
+    width: calc(100%% - 2rem);
+    margin: 1rem;
+    padding: 2rem;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--card);
+    box-shadow: 0 18px 34px rgba(36, 29, 18, 0.1);
+    text-align: center;
+  }
+  h1 {
+    margin: 0 0 0.75rem;
+    font-size: 1.25rem;
+    color: var(--accent-strong);
+  }
+  p {
+    margin: 0 0 1.5rem;
+    color: var(--text-soft);
+    line-height: 1.5;
+  }
+  a.btn {
+    display: inline-block;
+    padding: 0.6rem 1.4rem;
+    border-radius: 999px;
+    background: var(--accent);
+    color: #fff;
+    font-weight: 600;
+    text-decoration: none;
+  }
+  a.btn:hover {
+    background: var(--accent-strong);
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Login failed</h1>
+    <p>%s</p>
+    <a class="btn" href="/login">Try again</a>
+  </div>
+</body>
+</html>`
+
 // renderLoginError is the one error page GET /callback ever writes,
 // regardless of which specific check failed (unrecognized state, expired
 // state cookie, token-exchange failure, unrecognized sub, wrong role) —
@@ -76,8 +174,7 @@ func renderLoginError(c *gin.Context, logger *slog.Logger, reason string) {
 		logger.Warn("bff: login failed", "reason", reason)
 	}
 	c.Header("Content-Type", "text/html; charset=utf-8")
-	c.String(http.StatusUnauthorized, "<!doctype html><html><body><h1>Login failed</h1>"+
-		"<p>%s</p><p><a href=\"/login\">Try again</a></p></body></html>",
+	c.String(http.StatusUnauthorized, loginErrorPage,
 		html.EscapeString("Something went wrong signing you in. Please try again."))
 }
 
