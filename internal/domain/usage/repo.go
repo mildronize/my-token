@@ -10,11 +10,10 @@ import (
 
 // Event is this package's own representation of one usage_events row to
 // be written — deliberately distinct from db.UsageEvent (there isn't
-// one; this domain has no read path yet, only ingestion) for the same
-// reason internal/domain/todo's Todo type is distinct from db.Todo: so
-// every other file in this package can talk about "a usage event"
-// without importing internal/db itself (ARCHITECTURE.md rule 2: only
-// repo.go/*_repo.go may import the sqlc-generated package).
+// one; this domain has no read path yet, only ingestion), so every other
+// file in this package can talk about "a usage event" without importing
+// internal/db itself (ARCHITECTURE.md rule 2: only repo.go/*_repo.go may
+// import the sqlc-generated package).
 //
 // Cost and Source are always set by Service before this ever reaches
 // Repo (this ticket's own requirement: the server computes both, never
@@ -38,8 +37,7 @@ type Event struct {
 
 // Repository is the subset of Repo's methods Service depends on —
 // declared here, not in repo.go's own type, so tests can supply a fake
-// without a real database (mirrors internal/domain/todo's own
-// Repository/Repo split).
+// without a real database.
 type Repository interface {
 	// InsertBatch idempotently inserts every event in batch (INSERT OR
 	// IGNORE on id — a repeat id changes nothing) and returns how many

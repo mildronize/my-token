@@ -1,4 +1,4 @@
-// milestone-4/task-7: renders todo/comment bodies as Markdown. Ported from
+// milestone-4/task-7: renders comment bodies as Markdown. Ported from
 // my-task's own src/components/Markdown.tsx (the named source
 // TimelineEventRow.tsx mirrors — see that file's header for the citation),
 // mechanically adapted for this repo (no other logic change):

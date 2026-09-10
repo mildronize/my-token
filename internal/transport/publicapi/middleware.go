@@ -1,19 +1,20 @@
 // Package publicapi is the REST transport surface for agents/skills,
 // key-authenticated (_contract/API.md) — the public API distinct from the
 // owner-facing internal/transport/bff surface a later task adds. It holds
-// every HTTP-facing piece for both the todo domain and identity: the
-// generated-interface adapters (todo_handler.go, me_handler.go,
-// keys_handler.go) and the actor-resolution middleware (this file, moved
-// here from internal/identity's old handler.go/middleware_handler.go —
+// every HTTP-facing piece for both every domain module and identity: the
+// generated-interface adapters (me_handler.go, keys_handler.go,
+// usage_handler.go, and any domain handler modeled on them) and the
+// actor-resolution middleware (this file, moved here from
+// internal/identity's old handler.go/middleware_handler.go —
 // ARCHITECTURE.md: "Why transport is not inside a domain module
 // anymore"). No domain module or internal/identity may import this
 // package back (ARCHITECTURE.md rule 4) — dependencies point one way,
 // from here down into internal/domain/* and internal/identity, never the
 // reverse.
 //
-// This doc comment lives here, not on a per-domain handler file like
-// todo_handler.go, deliberately (task-9, Blocker B): every file that
-// implements a `<Domain>Server` is expected to be deleted whole on fork
+// This doc comment lives here, not on a per-domain handler file,
+// deliberately (task-9, Blocker B): every file that implements a
+// `<Domain>Server` is expected to be deleted whole on fork
 // (docs/GETTING-STARTED.md Step 8), and Go's package doc convention reads
 // from whichever file happens to declare it — this file is the one that
 // survives that deletion.
@@ -33,13 +34,13 @@ import (
 )
 
 // newAPIError builds an internal/api.Error-shaped response body — the
-// generated type the openapi-validated handlers (todo_handler.go and any
+// generated type the openapi-validated handlers (usage_handler.go and any
 // domain handler modeled on it) write directly, as opposed to this file's
 // own hand-rolled ErrorEnvelope. Shared here (task-9, Blocker B/C) so a
 // fork copying a domain handler file into this package never redeclares
-// it — it previously lived inside todo_handler.go, a file Step 8 of
-// docs/GETTING-STARTED.md deletes on fork, and which a same-package copy
-// (e.g. quote_handler.go) would otherwise redeclare.
+// it — a per-domain handler file is expected to be deleted whole on fork
+// (docs/GETTING-STARTED.md Step 8), and a same-package copy
+// (e.g. quote_handler.go) would otherwise redeclare a copy left inside it.
 func newAPIError(code, message string) api.Error {
 	e := api.Error{}
 	e.Error.Code = code
@@ -55,8 +56,8 @@ func newAPIError(code, message string) api.Error {
 // defensive, mirroring handleMe: it should be unreachable given the
 // intended middleware order (RejectActorFields, RequireActor, then the
 // handler), and is here only in case a route is ever wired without that
-// chain. Shared here for the same reason as newAPIError above — it
-// previously lived inside todo_handler.go, a file Step 8 deletes on fork.
+// chain. Shared here for the same reason as newAPIError above — a
+// per-domain handler file is expected to be deleted whole on fork.
 func actorID(c *gin.Context) (string, bool) {
 	user, ok := ActorFromContext(c)
 	if !ok {
@@ -67,8 +68,8 @@ func actorID(c *gin.Context) (string, bool) {
 }
 
 // actorContextKey is the gin context key RequireActor stores the
-// resolved identity.User under. todo_handler.go/me_handler.go/
-// keys_handler.go read it via ActorFromContext — I4: only this middleware
+// resolved identity.User under. me_handler.go/keys_handler.go/
+// usage_handler.go read it via ActorFromContext — I4: only this middleware
 // ever queries users/api_keys, handlers never do their own lookup.
 const actorContextKey = "identity.actor"
 
@@ -90,7 +91,7 @@ const forbiddenActorHeader = "X-Actor"
 // redefining an equivalent shape in a second place — _contract/API.md's
 // BFF section is explicit that bff-openapi.yaml "reuses publicapi's
 // envelope," not a second envelope kept in sync by hand. Both surfaces'
-// generated-interface glue (this package's own todo_handler.go/
+// generated-interface glue (this package's own usage_handler.go/
 // keys_handler.go's use of internal/api.Error for openapi-shaped
 // responses, and internal/bffapi's own Error for its validator) already
 // coexist with this hand-rolled type today, producing the identical JSON

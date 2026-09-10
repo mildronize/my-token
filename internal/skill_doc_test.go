@@ -1,16 +1,13 @@
-// Package internal — Done-when 6's own check: the `my-template-api`
-// skill doc (`.claude/skills/my-template-api/`) is the only thing an
-// agent reading this repo actually consults to call the API — a doc that
-// still tells an agent to call `DELETE /todos/:id` after tasks 3/4
-// removed it from the code makes the removal undone for the only readers
-// who act on it. This file is that doc's own coverage check, the same
-// floor-first shape as every other absence-assertion built this
-// milestone (I15's function-count floor, I20's file-count floor,
-// dbquery's grant-must-be-exercised check): an absence check with no
-// floor can pass by finding nothing to check at all — a moved skill
-// directory, a renamed file, a doc that fails to load — and "DELETE not
-// found" would be trivially true for a reason that has nothing to do
-// with whether the removal actually stuck.
+// Package internal — the `*-api` skill doc (`.claude/skills/my-token-api/`)
+// is the only thing an agent reading this repo actually consults to call
+// the API — a doc that still describes a deleted domain sends an agent
+// straight into 404s (docs/GETTING-STARTED.md's own warning). This file
+// is that doc's own coverage check: story-1/ticket-16 retired this
+// file's original milestone-4-specific checks (which verified that
+// milestone's own todo-domain rewrite of the doc) along with the domain
+// they verified, and replaced them with the equivalent pair for this
+// fork's own real domain — an absence check (the deleted domain must not
+// still be documented) and a presence check (the real one must be).
 package internal
 
 import (
@@ -88,73 +85,39 @@ func readSkillDocs(t *testing.T, root string) (combined string, perFile map[stri
 	return combined, perFile
 }
 
-// TestDoneWhen6_SkillDocDeleteTodosRemoved is Done-when 6's own check:
-// the skill doc no longer tells an agent to call the removed
-// DELETE /api/v1/todos/:id.
-//
-// Deliberately NOT a bare substring search for "DELETE" — that would
-// false-positive on DELETE /api/v1/keys/:id, a real, still-current
-// endpoint this same doc correctly documents, and on this very file's
-// own prose explaining the removal ("there is no DELETE .../todos/:id
-// any more"). Instead it looks for the two literal SHAPES a live
-// endpoint entry actually takes in this doc — SKILL.md's table row and
-// endpoints.md's section header — which only reappear if someone
-// re-documents the endpoint as available, not if someone merely
-// mentions its absence in a sentence.
-func TestDoneWhen6_SkillDocDeleteTodosRemoved(t *testing.T) {
+// TestSkillDocDoesNotDocumentTheDeletedExampleDomain is story-1/
+// ticket-16's own check, replacing this file's former milestone-4
+// Done-when-6 checks (retired along with the domain those verified —
+// see below): the skill doc no longer tells an agent to call `/todos`
+// endpoints that no longer exist. A doc that still described a deleted
+// domain would send an agent following it straight into real 404s
+// (docs/GETTING-STARTED.md's own warning about exactly this).
+func TestSkillDocDoesNotDocumentTheDeletedExampleDomain(t *testing.T) {
 	root := repoRoot(t)
-	combined, perFile := readSkillDocs(t, root)
-	_ = perFile
+	combined, _ := readSkillDocs(t, root)
 
-	assert.NotContainsf(t, combined, "| `DELETE` | `/api/v1/todos/:id` |",
-		"SKILL.md's endpoints table must not list DELETE /api/v1/todos/:id as a live row — "+
-			"that endpoint was removed in milestone-4 (Done-when 6)")
-	assert.NotContainsf(t, combined, "## `DELETE /todos/:id`",
-		"references/endpoints.md must not carry a DELETE /todos/:id section header — "+
-			"that endpoint was removed in milestone-4 (Done-when 6)")
-
-	// The legitimate DELETE /keys/:id entries must still be there — this
-	// test proves the removed endpoint is gone, not that DELETE itself
-	// was purged from the doc wholesale (which would be a different,
-	// wrong fix: it's a real, current, still-documented endpoint).
-	assert.Containsf(t, combined, "`/api/v1/keys/:id`",
-		"the doc's own real DELETE /api/v1/keys/:id entry must still be documented — "+
-			"this check must not have been satisfied by deleting DELETE mentions wholesale")
+	assert.NotContainsf(t, strings.ToLower(combined), "todo",
+		"the skill doc must not reference the deleted example domain — "+
+			"an agent following this skill instead of reading the real openapi.yaml "+
+			"would get 404s against paths that don't exist (story-1/ticket-16)")
 }
 
-// TestDoneWhen6_SkillDocDocumentsTheNewEventEndpoints is the positive
-// half Clara asked for explicitly: an absence check alone cannot see "a
-// doc that removed DELETE and documented nothing new" — a doc could pass
-// the test above by simply deleting the DELETE section and adding
-// nothing in its place, which would be half a fix, not a fix.
-func TestDoneWhen6_SkillDocDocumentsTheNewEventEndpoints(t *testing.T) {
+// TestSkillDocDocumentsTheRealDomain is the positive half: an absence
+// check alone cannot see "a doc that removed the old domain and
+// documented nothing in its place" — this fork's own real domain
+// (story-1/ticket-11's usage-events ingestion) must actually be there.
+func TestSkillDocDocumentsTheRealDomain(t *testing.T) {
 	root := repoRoot(t)
 	combined, _ := readSkillDocs(t, root)
 
 	for _, must := range []string{
-		"/todos/:id/events", // the new endpoints exist in the doc at all
-		"status_changed",    // at least one event type is named
-		"commented",
-		"assigned",
-		"field_changed",
-		"clientRequestId", // I19's idempotency key is documented as required
+		"/api/v1/usage-events/batch",
+		"install_id",
+		"received",
+		"inserted",
 	} {
 		assert.Containsf(t, combined, must,
-			"the skill doc must document %q — a doc that removed DELETE without documenting "+
-				"the new event endpoints is only half fixed", must)
-	}
-}
-
-// TestDoneWhen6_SkillDocFieldListUpdated is the other half of "documented
-// something new": the field list (status/assignee/priority/dueDate)
-// replacing the old done/owner-scoped shape.
-func TestDoneWhen6_SkillDocFieldListUpdated(t *testing.T) {
-	root := repoRoot(t)
-	combined, _ := readSkillDocs(t, root)
-
-	for _, must := range []string{"assigneeId", "priority", "dueDate", "createdBy"} {
-		assert.Containsf(t, combined, must,
-			"the skill doc must document the %q field — the milestone-4 field list "+
-				"(status/assignee/priority/dueDate/createdBy) replacing done/ownerId", must)
+			"the skill doc must document %q — this fork's own real domain "+
+				"(story-1/ticket-11's usage-events ingestion)", must)
 	}
 }

@@ -1,7 +1,7 @@
 // Package identity owns the users and api_keys tables and the
 // actor-resolution logic (API key -> JWT -> reject) behind them — see
 // doc.go for why the gin middleware that drives it lives in
-// internal/transport/publicapi instead. Unlike internal/domain/todo, keep
+// internal/transport/publicapi instead. Unlike a domain module, keep
 // this directory on fork — every service built from this template needs
 // its own identity/auth seam.
 package identity
@@ -230,8 +230,7 @@ func (r *Repo) CreateAPIKey(ctx context.Context, userID, keyHash, keyPrefix stri
 // (`revoked_at IS NULL`), regardless of expiry — an expired-but-unrevoked
 // key still shows up so the caller can see it needs rotating (API.md
 // `GET /api/v1/keys`; this is a listing decision, distinct from I9's
-// auth-time check in Service.tryAPIKey). Ordered created_at descending,
-// matching todo's ListByOwner.
+// auth-time check in Service.tryAPIKey). Ordered created_at descending.
 func (r *Repo) ListAPIKeysByOwner(ctx context.Context, userID string) ([]APIKey, error) {
 	rows, err := r.q.ListAPIKeysByOwner(ctx, userID)
 	if err != nil {
@@ -248,7 +247,7 @@ func (r *Repo) ListAPIKeysByOwner(ctx context.Context, userID string) ([]APIKey,
 // userID scoping means a caller can only ever revoke its own key.
 // ErrNotFound covers both "no such key" and "not this caller's key",
 // mirroring I3's ownership-scoping rule (absence, not permission) applied
-// here to keys instead of todos.
+// here to keys.
 func (r *Repo) RevokeAPIKey(ctx context.Context, id, userID string) (APIKey, error) {
 	row, err := r.q.RevokeAPIKey(ctx, db.RevokeAPIKeyParams{
 		RevokedAt: sql.NullTime{Time: time.Now().UTC(), Valid: true},

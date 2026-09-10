@@ -45,7 +45,7 @@ services:
     # how this task's own end-to-end smoke pass checks it.
 
 volumes:
-  # Named volume holding the SQLite file (users/api_keys/todos) —
+  # Named volume holding the SQLite file (users/api_keys/usage_events) —
   # survives `docker compose down` (not `down -v`), so restarting the
   # service doesn't lose data. Migrations apply automatically on every
   # server start (platform.Migrate, idempotent via goose's own

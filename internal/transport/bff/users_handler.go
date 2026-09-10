@@ -39,8 +39,7 @@ func toBFFUser(u identity.User) bffapi.User {
 // active user, either role, ordered by handle (identity.Service.
 // ListActiveUsers' own doc comment) — session-gated only, no further
 // scoping: unlike /keys, there is no "which users belong to this caller"
-// question to ask, every active user is a real candidate assignee for
-// every todo (todos are shared, GOAL.md's Ownership model decision).
+// question to ask.
 func (s *UsersServer) ListUsers(c *gin.Context) {
 	if _, ok := bffOwnerID(c); !ok {
 		return

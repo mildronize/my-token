@@ -26,7 +26,7 @@ import (
 // moved out of that package to here (ARCHITECTURE.md — a domain module or
 // internal/identity holds no transport code), so this package can no
 // longer reach them. This matches the pattern every other handler test in
-// this package already uses (todo_handler_test.go, keys_handler_test.go).
+// this package already uses (keys_handler_test.go, usage_handler_test.go).
 func newMiddlewareTestRouter(svc *identity.Service) *gin.Engine {
 	router := gin.New()
 	group := router.Group("/api/v1")
@@ -61,7 +61,7 @@ func TestI1_RejectActorFields_BodyField(t *testing.T) {
 			svc := identity.NewService(repo, repo, nil, nil)
 			router := newMiddlewareTestRouter(svc)
 
-			body := `{"` + field + `":"someone-else","title":"a todo"}`
+			body := `{"` + field + `":"someone-else","title":"a note"}`
 			rec := doMiddlewareRequest(router, http.MethodPost, "/api/v1/echo", body, nil)
 
 			assert.Equal(t, http.StatusBadRequest, rec.Code)
@@ -106,7 +106,7 @@ func TestI1_RejectActorFields_AllowsCleanRequest(t *testing.T) {
 	router := newMiddlewareTestRouter(svc)
 	_, rawKey := createAgentWithKey(t, conn, "agent-a")
 
-	rec := doMiddlewareRequest(router, http.MethodPost, "/api/v1/echo", `{"title":"a todo"}`,
+	rec := doMiddlewareRequest(router, http.MethodPost, "/api/v1/echo", `{"title":"a note"}`,
 		map[string]string{"Authorization": "Bearer " + rawKey})
 
 	assert.Equal(t, http.StatusOK, rec.Code, "a request with no actor field must not be rejected by I1's guard")
@@ -143,9 +143,8 @@ func TestI5_UnauthorizedResponseBodyIdenticalAcrossFailureReasons(t *testing.T) 
 	// An inactive user. repo.CreateUser always creates an active row
 	// (DATA_MODEL.md — there is no "create inactive" constructor), so
 	// this test flips the flag directly against the database afterwards,
-	// the same way internal/domain/todo's repo_test.go manipulates
-	// created_at directly when the schema itself offers no other way to
-	// reach the state under test.
+	// when the schema itself offers no other way to reach the state under
+	// test.
 	inactive, err := repo.CreateUser(ctx, "inactive-agent", "agent", nil)
 	require.NoError(t, err)
 	_, err = conn.ExecContext(ctx, `UPDATE users SET active = FALSE WHERE id = ?`, inactive.ID)

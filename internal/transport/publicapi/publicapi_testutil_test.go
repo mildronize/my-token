@@ -18,7 +18,6 @@ import (
 	_ "modernc.org/sqlite" // registers the "sqlite" database/sql driver for these tests
 
 	"github.com/mildronize/my-token/internal/api"
-	"github.com/mildronize/my-token/internal/domain/todo"
 	"github.com/mildronize/my-token/internal/domain/usage"
 	"github.com/mildronize/my-token/internal/identity"
 )
@@ -28,7 +27,7 @@ func init() {
 }
 
 // repoRootForTests resolves the module root from this test file's own
-// location (mirrors internal/domain/todo's todo_testutil_test.go and
+// location (mirrors internal/domain/usage's usage_testutil_test.go and
 // internal/identity's identity_testutil_test.go), so tests work
 // regardless of the directory `go test` is invoked from.
 func repoRootForTests(t *testing.T) string {
@@ -66,26 +65,25 @@ func newTestDB(t *testing.T) *sql.DB {
 }
 
 // compositeServer mirrors cmd/server's apiServer — MeServer contributes
-// GetMe, *KeysServer contributes ListKeys/RevokeKey, *TodoServer
-// contributes the todo CRUD methods — so these integration tests exercise
-// the exact same generated-interface/openapi-validated wiring production
-// uses, not a hand-rolled subset of it. Moved here (task-9, Blocker A)
-// from todo_handler_test.go, a file docs/GETTING-STARTED.md's Step 8
-// deletes on fork — this file is not on that delete list, so the shared
-// harness now actually lives where the doc already said it did, and
-// deleting todo_handler_test.go no longer takes it down too.
+// GetMe, *KeysServer contributes ListKeys/RevokeKey, *UsageServer
+// contributes story-1/ticket-11's ingestion endpoint — so these
+// integration tests exercise the exact same generated-interface/
+// openapi-validated wiring production uses, not a hand-rolled subset of
+// it. This shared harness lives here (not in any one domain handler test
+// file) precisely so deleting a domain's handler file never takes it down
+// too — the deleted example domain's own generated-interface adapter used
+// to embed here too (story-1/ticket-16).
 type compositeServer struct {
 	MeServer
 	*KeysServer
-	*TodoServer
 	*UsageServer
 }
 
 // newIntegrationRouter builds a full /api/v1 stack — RejectActorFields,
 // RequireActor, the openapi.yaml request validator, then
 // api.RegisterHandlers — against a real temp-file SQLite database (not a
-// mock), for todo CRUD + ownership-scoping integration tests, and
-// story-1/ticket-11's usage-events ingestion tests (usage_handler_test.go).
+// mock), for keys/identity integration tests and story-1/ticket-11's
+// usage-events ingestion tests (usage_handler_test.go).
 func newIntegrationRouter(t *testing.T) (*gin.Engine, *sql.DB) {
 	t.Helper()
 	conn := newTestDB(t)
@@ -93,7 +91,6 @@ func newIntegrationRouter(t *testing.T) (*gin.Engine, *sql.DB) {
 	identityRepo := identity.NewRepo(conn)
 	identitySvc := identity.NewService(identityRepo, identityRepo, nil, nil)
 
-	todoSvc := todo.NewService(todo.NewRepo(conn))
 	usageSvc := usage.NewService(usage.NewRepo(conn))
 
 	validator, err := api.RequestValidator()
@@ -104,7 +101,6 @@ func newIntegrationRouter(t *testing.T) (*gin.Engine, *sql.DB) {
 	group.Use(RejectActorFields(), RequireActor(identitySvc), validator)
 	api.RegisterHandlers(group, compositeServer{
 		KeysServer:  NewKeysServer(identitySvc),
-		TodoServer:  NewTodoServer(todoSvc),
 		UsageServer: NewUsageServer(usageSvc),
 	})
 
@@ -114,7 +110,7 @@ func newIntegrationRouter(t *testing.T) (*gin.Engine, *sql.DB) {
 // createAgentWithKey seeds a users row (role=agent) and a live api_keys
 // row for it, returning the user's id and the raw key a test can present
 // as `Authorization: Bearer <rawKey>`. Shared by every handler test file
-// in this package (todo, keys, middleware) — one definition, not one per
+// in this package (keys, middleware, usage) — one definition, not one per
 // file, now that they all live in the same package.
 func createAgentWithKey(t *testing.T, conn *sql.DB, handle string) (userID, rawKey string) {
 	t.Helper()
@@ -133,8 +129,8 @@ func createAgentWithKey(t *testing.T, conn *sql.DB, handle string) (userID, rawK
 }
 
 // doJSONRequest is the shared HTTP-call helper every handler test file in
-// this package uses — generic across every domain, not todo-specific, so
-// it lives here rather than in a per-domain handler test file.
+// this package uses — generic across every domain, not tied to any one of
+// them, so it lives here rather than in a per-domain handler test file.
 func doJSONRequest(t *testing.T, router *gin.Engine, method, path, rawKey string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	var buf bytes.Buffer
@@ -152,8 +148,8 @@ func doJSONRequest(t *testing.T, router *gin.Engine, method, path, rawKey string
 }
 
 // decodeError decodes an api.Error-shaped response body — generic across
-// every domain (the error envelope shape is package-wide, not
-// todo-specific), so it lives here rather than in a per-domain handler
+// every domain (the error envelope shape is package-wide, not tied to any
+// one domain), so it lives here rather than in a per-domain handler
 // test file.
 func decodeError(t *testing.T, rec *httptest.ResponseRecorder) api.Error {
 	t.Helper()

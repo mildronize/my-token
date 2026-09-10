@@ -17,22 +17,20 @@ import (
 // so this test exercises exactly what production runs, embedded FS and
 // all.
 //
-// Moved here from internal/todo/migration_test.go (task-6.md, P1(b)):
-// that location meant this test — Done-when 2's *only* check — was
-// deleted silently the moment a fork did GETTING-STARTED.md Step 5's
-// `rm -rf internal/todo`, with no invariant name tying it to anything
-// that would notice. It exercises Migrate and the embedded migration
-// set, not anything domain-specific, so internal/platform (which
-// GETTING-STARTED.md says is not part of Step 5's deletion) is where it
-// belongs and survives a fork.
+// Moved here (task-6.md, P1(b)) from a milestone-1-era domain module's
+// own migration test: that location meant this test — Done-when 2's
+// *only* check — was deleted silently the moment a fork deleted that
+// module per GETTING-STARTED.md Step 5/8, with no invariant name tying it
+// to anything that would notice. It exercises Migrate and the embedded
+// migration set, not anything domain-specific, so internal/platform
+// (which GETTING-STARTED.md says is not part of that deletion) is where
+// it belongs and survives a fork.
 //
 // Only users and api_keys — internal/identity's tables, which
-// GETTING-STARTED.md says stay as-is on fork — are asserted by name.
-// The domain-specific table this test used to also check ("todos")
-// deliberately isn't: after a fork replaces internal/todo with its own
-// domain, that table has a different name, and the new domain's own
-// tests already exercise that its replacement migration applies (they
-// can't run at all otherwise).
+// GETTING-STARTED.md says stay as-is on fork — are asserted by name. A
+// domain-specific table deliberately isn't: after a fork deletes the
+// example domain module and adds its own, that module's own tests already
+// exercise that its migration applies (they can't run at all otherwise).
 func TestGooseUp_FullMigrationSetAppliesCleanly(t *testing.T) {
 	f, err := os.CreateTemp(t.TempDir(), "fresh-*.db")
 	require.NoError(t, err)

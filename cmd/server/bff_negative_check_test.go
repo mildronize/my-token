@@ -1,9 +1,7 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -14,9 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/mildronize/my-token/internal/identity"
 	"github.com/mildronize/my-token/internal/platform"
-	"github.com/mildronize/my-token/internal/transport/bff"
 )
 
 // discardLogger builds a slog.Logger that writes nowhere — this file's
@@ -92,108 +88,4 @@ func TestBFF_UnmatchedAPIBFFPathAnswers404NotTheSPA(t *testing.T) {
 
 		assert.Equal(t, http.StatusOK, rec.Code, "milestone-3/task-1's own SPA fallback must still serve client-side routes")
 	})
-}
-
-// TestBFF_FullCRUDRoundTrip_ThroughAssembledMainHandler is this task's
-// verification that the real create->list->get->update->events round trip
-// holds through cmd/server's actual composed handler (buildHandler/
-// wireBFF), not only internal/transport/bff's own isolated test router
-// (internal/transport/bff/todo_handler_test.go's
-// TestBFFHandler_FullCRUDRoundTrip_RealSessionCookie already covers that
-// layer) — the same session-seeding shortcut (bff.Signer.NewSessionCookie,
-// called directly) reused throughout this repo's own tests, driven here
-// through http.Handler.ServeHTTP so it exercises main.go's actual route
-// composition end to end.
-//
-// milestone-4: no more `done`/DELETE — a fresh todo starts `status: open`,
-// `clientRequestId` is required on every write (I19), status changes go
-// through POST .../events instead of PATCH, and a `type: "created"` write
-// on this same assembled handler is genuinely rejected (I16) — the
-// negative half task-4 owns independently of internal/transport/publicapi's
-// own equivalent (TestDoneWhen13_...) and internal/transport/bff's own
-// isolated-router equivalent (TestDoneWhen14_...): this is the third,
-// distinct proof point, against the actual wired main.go composition.
-func TestBFF_FullCRUDRoundTrip_ThroughAssembledMainHandler(t *testing.T) {
-	db := newMainTestDB(t)
-	cfg := &platform.Config{
-		Port:          8080,
-		DatabasePath:  "unused-in-this-test",
-		SessionSecret: "test-session-secret-for-main-round-trip",
-	}
-	handler, err := buildHandler(context.Background(), cfg, db, discardLogger(), testDistFS())
-	require.NoError(t, err)
-
-	repo := identity.NewRepo(db)
-	sub := "main-round-trip-sub"
-	owner, err := repo.CreateUser(context.Background(), "main-round-trip-owner", "owner", &sub)
-	require.NoError(t, err)
-
-	signer := bff.NewSigner([]byte(cfg.SessionSecret))
-	sessionValue, err := signer.NewSessionCookie(owner.ID)
-	require.NoError(t, err)
-
-	doReq := func(method, path string, body []byte) *httptest.ResponseRecorder {
-		var req *http.Request
-		if body != nil {
-			req = httptest.NewRequest(method, path, bytes.NewReader(body))
-			req.Header.Set("Content-Type", "application/json")
-		} else {
-			req = httptest.NewRequest(method, path, nil)
-		}
-		req.AddCookie(&http.Cookie{Name: "session", Value: sessionValue})
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
-		return rec
-	}
-
-	decodeField := func(t *testing.T, body []byte, field string) string {
-		t.Helper()
-		var m map[string]any
-		require.NoError(t, json.Unmarshal(body, &m))
-		v, ok := m[field].(string)
-		require.Truef(t, ok, "response body has no string field %q: %s", field, string(body))
-		return v
-	}
-
-	createRec := doReq(http.MethodPost, "/api/bff/todos", []byte(`{"title":"main-handler round trip","clientRequestId":"main-rt-create-1"}`))
-	require.Equal(t, http.StatusCreated, createRec.Code, createRec.Body.String())
-	id := decodeField(t, createRec.Body.Bytes(), "id")
-	assert.Contains(t, createRec.Body.String(), `"status":"open"`, "a fresh todo must start open")
-
-	listRec := doReq(http.MethodGet, "/api/bff/todos", nil)
-	require.Equal(t, http.StatusOK, listRec.Code)
-	assert.Contains(t, listRec.Body.String(), id, "the created todo must actually be listed back")
-
-	getRec := doReq(http.MethodGet, "/api/bff/todos/"+id, nil)
-	require.Equal(t, http.StatusOK, getRec.Code)
-
-	patchRec := doReq(http.MethodPatch, "/api/bff/todos/"+id, []byte(`{"title":"main-handler round trip (renamed)","clientRequestId":"main-rt-patch-1"}`))
-	require.Equal(t, http.StatusOK, patchRec.Code)
-	assert.Contains(t, patchRec.Body.String(), `"main-handler round trip (renamed)"`)
-
-	getAfterPatchRec := doReq(http.MethodGet, "/api/bff/todos/"+id, nil)
-	require.Equal(t, http.StatusOK, getAfterPatchRec.Code)
-	assert.Contains(t, getAfterPatchRec.Body.String(), `"main-handler round trip (renamed)"`, "the update must actually be persisted, not just echoed by the patch response")
-
-	// status: closed succeeds on this surface (I18 — the owner's own
-	// surface), through the actual assembled handler.
-	closeRec := doReq(http.MethodPost, "/api/bff/todos/"+id+"/events", []byte(`{"type":"status_changed","clientRequestId":"main-rt-close-1","to":"closed"}`))
-	require.Equal(t, http.StatusCreated, closeRec.Code, closeRec.Body.String())
-
-	getAfterCloseRec := doReq(http.MethodGet, "/api/bff/todos/"+id, nil)
-	require.Equal(t, http.StatusOK, getAfterCloseRec.Code)
-	assert.Contains(t, getAfterCloseRec.Body.String(), `"status":"closed"`, "the status write must actually be persisted")
-
-	// DELETE genuinely 404s — the route doesn't exist (GOAL.md's "DELETE
-	// removed" decision), through the actual assembled handler.
-	deleteRec := doReq(http.MethodDelete, "/api/bff/todos/"+id, nil)
-	assert.Equal(t, http.StatusNotFound, deleteRec.Code, "DELETE must be a genuine 404 (no route), never a 405 or a silent 204")
-
-	// type: "created" is genuinely rejected (I16), through the actual
-	// assembled handler — a third, independent proof point beyond
-	// internal/transport/publicapi's and internal/transport/bff's own
-	// isolated-router equivalents.
-	forgedRec := doReq(http.MethodPost, "/api/bff/todos/"+id+"/events", []byte(`{"type":"created","clientRequestId":"main-rt-forge-1"}`))
-	assert.Equal(t, http.StatusBadRequest, forgedRec.Code, "type: created must be rejected, not silently accepted")
-	assert.Contains(t, forgedRec.Body.String(), `"validation_error"`)
 }

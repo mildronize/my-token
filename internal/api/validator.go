@@ -1,8 +1,8 @@
 // Package api holds the openapi.yaml-generated server interface
 // (openapi.gen.go) plus the small amount of hand-written glue needed to
 // turn it into a working gin request validator (this file). It is not one
-// of ARCHITECTURE.md's "todo"/"identity" domain modules — cmd/server
-// composes both of those into this package's ServerInterface.
+// of ARCHITECTURE.md's domain modules or internal/identity — cmd/server
+// composes those into this package's ServerInterface.
 package api
 
 import (

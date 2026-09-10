@@ -14,8 +14,7 @@ import (
 // dispatch-shape tests below (does Service compute Cost/Source correctly
 // before delegating, does it pass every field through unchanged) — the
 // real idempotent-insert behavior against a real database is proven in
-// repo_test.go instead (mirrors internal/domain/todo's own
-// fakeRepo/real-repo split).
+// repo_test.go instead.
 type fakeRepo struct {
 	inserted []Event
 	// insertedIDs simulates INSERT OR IGNORE's own dedup, so

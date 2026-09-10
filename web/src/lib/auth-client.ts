@@ -18,22 +18,22 @@
 //
 // milestone-4 hardening: `role` is now ALSO exposed as its own,
 // properly-named, narrowly-typed field (`AuthUser.role`), not just
-// smuggled inside `email` for display. Clara found this by reading
-// `TodoRow.tsx`/`TodoDetailPage.tsx` passing `session?.user.email` into
-// `canCloseTodo` and concluded the argument must be `undefined` (no
-// `email` field on `Me`) — a reasonable read of the generated schema
-// alone, and wrong only because this file's `email: me.role` reuse is
-// exactly the kind of thing a schema read can't see. A rendering test
-// (`TodosList.test.tsx`, opening the real control) proved the reused
-// field actually carried the right value and `closed` genuinely was
-// offered for a mocked owner session — so the specific mechanism
-// suspected here was not the live bug. It is still worth fixing on its
-// own: overloading a display field to secretly carry a security-relevant
-// value is a real landmine (it fooled a careful reader once already),
-// independent of whether it caused มายด์'s observed one. `AuthRole`'s
-// union type is the actual fix Clara asked for — `string | undefined`
-// would have let `.email` compile into `canCloseTodo` without complaint;
-// this type would not.
+// smuggled inside `email` for display. Clara found this by reading the
+// example domain module's own components (since deleted, story-1/
+// ticket-16) passing `session?.user.email` into a permission check and
+// concluding the argument must be `undefined` (no `email` field on `Me`)
+// — a reasonable read of the generated schema alone, and wrong only
+// because this file's `email: me.role` reuse is exactly the kind of thing
+// a schema read can't see. A rendering test (opening the real control)
+// proved the reused field actually carried the right value and the
+// permission-gated action genuinely was offered for a mocked owner
+// session — so the specific mechanism suspected here was not the live
+// bug. It is still worth fixing on its own: overloading a display field
+// to secretly carry a security-relevant value is a real landmine (it
+// fooled a careful reader once already), independent of whether it
+// caused มายด์'s observed one. `AuthRole`'s union type is the actual fix
+// Clara asked for — `string | undefined` would have let `.email` compile
+// into that permission check without complaint; this type would not.
 import { useQuery } from "@tanstack/react-query";
 
 import type { components } from "~/lib/api/bff-schema.gen";
@@ -47,10 +47,9 @@ export interface AuthUser {
   email: string;
   /**
    * `undefined` for any role string that isn't exactly "owner" or
-   * "agent" — fails closed the same direction `todo.PolicyActor`'s own
-   * doc comment does for an unrecognized role (permission.go), rather
-   * than letting a typo or a future role value silently satisfy (or
-   * silently fail to satisfy) a `=== "owner"` check either way.
+   * "agent" — fails closed rather than letting a typo or a future role
+   * value silently satisfy (or silently fail to satisfy) a
+   * `=== "owner"` check either way.
    */
   role: AuthRole | undefined;
 }
@@ -113,10 +112,10 @@ export function useSession(): UseSessionResult {
 }
 
 /**
- * No BFF session-clear endpoint exists yet — task-2's scope was GET
- * /api/bff/me plus todo/key CRUD, no logout/session-clear route
- * (.chief/milestone-3/_contract/API.md, _plan/_todo.md's task-2 spec).
- * Inventing one is explicitly out of this task's scope (task-3's own
+ * No BFF session-clear endpoint exists yet — task-2's own scope never
+ * included a logout/session-clear route
+ * (.chief/milestone-3/_contract/API.md). Inventing one is explicitly out
+ * of this task's scope (task-3's own
  * instructions: "don't invent a new BFF endpoint yourself"), so this stays
  * a no-op until a future milestone adds that endpoint — Header.tsx's own
  * handleSignOut still navigates to "/" afterward, which (since the session

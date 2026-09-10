@@ -3,7 +3,7 @@
 // turn it into a working gin request validator (this file) — the BFF's
 // own mirror of internal/api's validator.go, one per spec file per
 // _contract/API.md's "Two specs, not one" decision. It is not one of
-// ARCHITECTURE.md's "todo"/"identity" domain modules; internal/transport/
+// ARCHITECTURE.md's domain modules or internal/identity; internal/transport/
 // bff composes its own ServerInterface implementation on top of this
 // package the same way internal/transport/publicapi composes one on top
 // of internal/api.

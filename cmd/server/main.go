@@ -1,17 +1,18 @@
 // Command server is the template's HTTP service entrypoint. It wires
 // config, logging, the SQLite connection, and two gin engines together and
 // starts listening on one port: internal/transport/publicapi's routes
-// (todo CRUD, GET /me, /keys, mounted under /api/v1 plus /healthz) and
-// internal/transport/bff's routes (GET /login, GET /callback, plus the
-// embedded Vite SPA — web/embed.go, cmd/server/spa.go — serving "/" and
-// everything else bff doesn't explicitly claim, milestone-3/task-1) share
-// one *sql.DB and one *identity.Repo/*todo.Service, but each gets its own
-// *gin.Engine (and its own copy of platform's cross-cutting middleware —
-// see buildHandler) since they're different transport surfaces per
-// ARCHITECTURE.md. A stdlib http.ServeMux in front dispatches by path
-// prefix to whichever engine owns it — this keeps the "one port"
-// deployment model docker-compose.yml and DEPLOY-REQUIREMENTS.md already
-// document, rather than needing a second listener for bff.
+// (GET /me, /keys, story-1/ticket-11's usage ingestion, mounted under
+// /api/v1 plus /healthz) and internal/transport/bff's routes (GET /login,
+// GET /callback, plus the embedded Vite SPA — web/embed.go,
+// cmd/server/spa.go — serving "/" and everything else bff doesn't
+// explicitly claim, milestone-3/task-1) share one *sql.DB and one
+// *identity.Repo, but each gets its own *gin.Engine (and its own copy of
+// platform's cross-cutting middleware — see buildHandler) since they're
+// different transport surfaces per ARCHITECTURE.md. A stdlib
+// http.ServeMux in front dispatches by path prefix to whichever engine
+// owns it — this keeps the "one port" deployment model docker-compose.yml
+// and DEPLOY-REQUIREMENTS.md already document, rather than needing a
+// second listener for bff.
 package main
 
 import (
@@ -31,7 +32,6 @@ import (
 
 	"github.com/mildronize/my-token/internal/api"
 	"github.com/mildronize/my-token/internal/bffapi"
-	"github.com/mildronize/my-token/internal/domain/todo"
 	"github.com/mildronize/my-token/internal/domain/usage"
 	"github.com/mildronize/my-token/internal/identity"
 	"github.com/mildronize/my-token/internal/platform"
@@ -107,7 +107,6 @@ func run() error {
 // run before `go test` (cmd/server/bff_negative_check_test.go).
 func buildHandler(ctx context.Context, cfg *platform.Config, db *sql.DB, logger *slog.Logger, distFS fs.FS) (http.Handler, error) {
 	repo := identity.NewRepo(db)
-	todoSvc := todo.NewService(todo.NewRepo(db))
 	usageSvc := usage.NewService(usage.NewRepo(db))
 
 	// --- publicapi ----------------------------------------------------
@@ -117,7 +116,7 @@ func buildHandler(ctx context.Context, cfg *platform.Config, db *sql.DB, logger 
 	if err != nil {
 		return nil, fmt.Errorf("wiring identity module: %w", err)
 	}
-	if err := wirePublicAPI(apiV1, todoSvc, usageSvc, identitySvc); err != nil {
+	if err := wirePublicAPI(apiV1, usageSvc, identitySvc); err != nil {
 		return nil, fmt.Errorf("wiring public API: %w", err)
 	}
 
@@ -125,10 +124,10 @@ func buildHandler(ctx context.Context, cfg *platform.Config, db *sql.DB, logger 
 	bffRouter := platform.NewRouter(logger)
 	// identitySvc (built once by wireIdentity, above) is shared with bff's
 	// own new /api/bff/keys endpoints (milestone-3/task-2) — one
-	// *identity.Service instance, not two independently-constructed ones,
-	// the same shared-service-layer reasoning todoSvc's own single
-	// instance already follows across both engines.
-	if err := wireBFF(ctx, bffRouter, cfg, repo, todoSvc, usageSvc, identitySvc, logger, distFS); err != nil {
+	// *identity.Service instance, not two independently-constructed ones
+	// (ARCHITECTURE.md's shared-service-layer rule), the same reasoning
+	// usageSvc's own single instance already follows across both engines.
+	if err := wireBFF(ctx, bffRouter, cfg, repo, usageSvc, identitySvc, logger, distFS); err != nil {
 		return nil, fmt.Errorf("wiring bff: %w", err)
 	}
 
@@ -155,8 +154,8 @@ func buildHandler(ctx context.Context, cfg *platform.Config, db *sql.DB, logger 
 // own). It does not register any routes itself: route registration
 // happens once, in wirePublicAPI, after every piece of publicapi's
 // ServerInterface exists to compose (identity's GetMe/keys alongside
-// todo's CRUD), so GET /api/v1/me runs through the same
-// generated/validated path as everything else (task-3) instead of a
+// story-1/ticket-11's usage ingestion), so GET /api/v1/me runs through the
+// same generated/validated path as everything else (task-3) instead of a
 // bespoke route added here.
 //
 // repo is built once by buildHandler and passed in (rather than
@@ -196,13 +195,13 @@ func wireIdentity(ctx context.Context, router *gin.Engine, repo *identity.Repo, 
 // apiServer composes every publicapi ServerInterface piece into the one
 // type internal/api.RegisterHandlers needs: publicapi.MeServer
 // contributes GetMe, *publicapi.KeysServer contributes
-// ListKeys/RevokeKey, *publicapi.TodoServer contributes the todo CRUD
-// methods. No method names collide, so plain embedding is sufficient — no
-// hand-written delegation methods to keep in sync as endpoints are added.
+// ListKeys/RevokeKey, *publicapi.UsageServer contributes story-1/
+// ticket-11's ingestion endpoint. No method names collide, so plain
+// embedding is sufficient — no hand-written delegation methods to keep in
+// sync as endpoints are added.
 type apiServer struct {
 	publicapi.MeServer
 	*publicapi.KeysServer
-	*publicapi.TodoServer
 	*publicapi.UsageServer
 }
 
@@ -210,18 +209,16 @@ var _ api.ServerInterface = apiServer{}
 
 // wirePublicAPI builds the openapi.yaml request validator and every piece
 // of internal/transport/publicapi's route-level API surface (identity's
-// keys endpoints, internal/domain/todo's CRUD, story-1/ticket-11's usage
-// ingestion), then registers all of it, identity's GetMe included, on
-// apiV1 in one call. The validator is mounted after RejectActorFields/
-// RequireActor (see wireIdentity) so a request is authenticated before
-// its payload shape is validated, not the other way around. todoSvc/
-// usageSvc are each built once by buildHandler and shared with wireBFF
-// too (ARCHITECTURE.md's shared-service-layer rule — one instance of
-// each service, not two): todoSvc backs wireBFF's own TodoServer,
-// usageSvc backs wireBFF's UsageServer (story-1/ticket-14's console read
-// side, GET /api/bff/usage/*) — this ingestion-only usage.Service
-// instance is the exact same one ticket 14's read handlers query.
-func wirePublicAPI(apiV1 *gin.RouterGroup, todoSvc *todo.Service, usageSvc *usage.Service, identitySvc *identity.Service) error {
+// keys endpoints, story-1/ticket-11's usage ingestion), then registers
+// all of it, identity's GetMe included, on apiV1 in one call. The
+// validator is mounted after RejectActorFields/RequireActor (see
+// wireIdentity) so a request is authenticated before its payload shape is
+// validated, not the other way around. usageSvc is built once by
+// buildHandler and shared with wireBFF too (ARCHITECTURE.md's
+// shared-service-layer rule — one instance, not two): this ingestion-only
+// usage.Service instance is the exact same one wireBFF's own UsageServer
+// (story-1/ticket-14's console read side, GET /api/bff/usage/*) queries.
+func wirePublicAPI(apiV1 *gin.RouterGroup, usageSvc *usage.Service, identitySvc *identity.Service) error {
 	validator, err := api.RequestValidator()
 	if err != nil {
 		return fmt.Errorf("building openapi request validator: %w", err)
@@ -231,7 +228,6 @@ func wirePublicAPI(apiV1 *gin.RouterGroup, todoSvc *todo.Service, usageSvc *usag
 	api.RegisterHandlers(apiV1, apiServer{
 		MeServer:    publicapi.MeServer{},
 		KeysServer:  publicapi.NewKeysServer(identitySvc),
-		TodoServer:  publicapi.NewTodoServer(todoSvc),
 		UsageServer: publicapi.NewUsageServer(usageSvc),
 	})
 
@@ -241,14 +237,13 @@ func wirePublicAPI(apiV1 *gin.RouterGroup, todoSvc *todo.Service, usageSvc *usag
 // bffServer composes every internal/bffapi ServerInterface piece into the
 // one type internal/bffapi.RegisterHandlers needs — the bff-surface mirror
 // of apiServer, above. bff.MeServer contributes GetMe, *bff.KeysServer
-// contributes ListKeys/RevokeKey, *bff.TodoServer contributes the todo
-// CRUD methods, *bff.UsersServer contributes ListUsers (the assignee
-// picker's data source). No method names collide, so plain embedding is
-// sufficient, same reasoning as apiServer.
+// contributes ListKeys/RevokeKey, *bff.UsersServer contributes ListUsers,
+// *bff.UsageServer contributes the console's read side (story-1/
+// ticket-14). No method names collide, so plain embedding is sufficient,
+// same reasoning as apiServer.
 type bffServer struct {
 	bff.MeServer
 	*bff.KeysServer
-	*bff.TodoServer
 	*bff.UsersServer
 	*bff.UsageServer
 }
@@ -281,15 +276,15 @@ var _ bffapi.ServerInterface = bffServer{}
 // place would have made "/" permanently unreachable for the SPA.
 // view_handler.go and its test were deliberately left in place through
 // task-1/task-2 (each task's own "what NOT to do" list) and removed by
-// task-3, once the SPA's own todos screen replaced what it rendered —
-// there is no view_handler.go left in this package at all now. todoSvc is
-// still accepted here for the /api/bff JSON surface below
-// (milestone-3/task-2 — the same instance wirePublicAPI's own TodoServer
-// uses, per ARCHITECTURE.md's shared-service-layer rule).
+// task-3, once the SPA's own screens replaced what it rendered — there is
+// no view_handler.go left in this package at all now. usageSvc is still
+// accepted here for the /api/bff JSON surface below (story-1/ticket-14 —
+// the same instance wirePublicAPI's own UsageServer uses, per
+// ARCHITECTURE.md's shared-service-layer rule).
 // distFS is the SPA's already-fs.Sub'd dist filesystem — see buildHandler's
 // own doc comment on why this is a parameter rather than wireBFF reaching
 // into web.DistFS itself.
-func wireBFF(ctx context.Context, router *gin.Engine, cfg *platform.Config, repo *identity.Repo, todoSvc *todo.Service, usageSvc *usage.Service, identitySvc *identity.Service, logger *slog.Logger, distFS fs.FS) error {
+func wireBFF(ctx context.Context, router *gin.Engine, cfg *platform.Config, repo *identity.Repo, usageSvc *usage.Service, identitySvc *identity.Service, logger *slog.Logger, distFS fs.FS) error {
 	secret := []byte(cfg.SessionSecret)
 	if len(secret) == 0 {
 		secret = make([]byte, 32)
@@ -339,9 +334,9 @@ func wireBFF(ctx context.Context, router *gin.Engine, cfg *platform.Config, repo
 	// session never resolves to role='agent') are two halves of one
 	// design. An owner has no Bearer credential to present at all, so a
 	// BFF session — gated here by bff.RequireJSONSession — is the *only*
-	// path by which POST/PATCH/DELETE /api/bff/todos and DELETE
-	// /api/bff/keys/{id} ever run; an agent has no session to present, so
-	// it can never reach these routes regardless. This group is
+	// path by which DELETE /api/bff/keys/{id} ever runs; an agent has no
+	// session to present, so it can never reach these routes regardless.
+	// This group is
 	// deliberately the only place in this service that registers an
 	// owner-authenticated write route — wirePublicAPI (above) registers
 	// none, and per the boundary reasoning above, never should.
@@ -362,7 +357,6 @@ func wireBFF(ctx context.Context, router *gin.Engine, cfg *platform.Config, repo
 	bffapi.RegisterHandlers(apiBFF, bffServer{
 		MeServer:    bff.MeServer{},
 		KeysServer:  bff.NewKeysServer(identitySvc),
-		TodoServer:  bff.NewTodoServer(todoSvc),
 		UsersServer: bff.NewUsersServer(identitySvc),
 		UsageServer: bff.NewUsageServer(usageSvc),
 	})

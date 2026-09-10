@@ -3,10 +3,9 @@
 // backend involved — and asserts the actual rendered output carries the
 // owning agent's handle, both on the row itself and in the revoke
 // confirmation dialog's title ("Revoke {handle}'s key?", my-task's own
-// exact copy shape — see RevokeKeyButton's own doc comment). Same
-// discipline TodosList.test.tsx already applies to TodoRow's own handle
-// display: a real render, not just a type-level check that ApiKey.handle
-// exists on the wire type.
+// exact copy shape — see RevokeKeyButton's own doc comment). A real
+// render, not just a type-level check that ApiKey.handle exists on the
+// wire type.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";

@@ -13,8 +13,8 @@ import (
 
 // bffKeyNotFoundBody is the one 404 response body RevokeKey ever writes
 // for an unknown or not-this-caller's key id (I3). Reuses
-// internal/transport/publicapi's ErrorEnvelope/NewErrorEnvelope directly,
-// same reasoning as todo_handler.go's bffTodoNotFoundError.
+// internal/transport/publicapi's ErrorEnvelope/NewErrorEnvelope directly —
+// mirrors every other handler's own not-found body in this package.
 var bffKeyNotFoundBody = publicapi.NewErrorEnvelope("not_found", "no such key", "")
 
 // KeysServer adapts identity.Service to internal/bffapi's generated
@@ -91,8 +91,8 @@ func (s *KeysServer) ListKeys(c *gin.Context) {
 // I21: session-gated (a valid owner session is required to reach this at
 // all), but no longer scoped to that session's own user_id — the owner may
 // revoke any agent's key. An id that never existed (or was already
-// revoked) returns not_found, the same "absence, not permission" shape I3
-// gives todos, applied here to the single dimension left to protect once
+// revoked) returns not_found, I3's "absence, not permission" shape,
+// applied here to the single dimension left to protect once
 // user_id-scoping is gone.
 func (s *KeysServer) RevokeKey(c *gin.Context, id string) {
 	if _, ok := bffOwnerID(c); !ok {

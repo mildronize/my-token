@@ -39,10 +39,10 @@ type IngestEvent struct {
 }
 
 // Service implements the usage domain contract (story-1/ticket-11) on
-// top of a Repository. This package never resolves an actor itself
-// (mirrors internal/domain/todo's own I4 note) — the transport layer
-// authenticates the caller (the collector's own API key) before this is
-// ever reached; the "actor" field on each IngestEvent below is an
+// top of a Repository. This package never resolves an actor itself (I4)
+// — the transport layer authenticates the caller (the collector's own
+// API key) before this is ever reached; the "actor" field on each
+// IngestEvent below is an
 // unrelated, purely domain-level fact about which crew produced the
 // reported session, not an identity claim about who is calling this API.
 type Service struct {

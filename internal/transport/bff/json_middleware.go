@@ -33,8 +33,7 @@ import (
 // directly rather than redefining an equivalent type here — _contract/
 // API.md's explicit "bff-openapi.yaml reuses publicapi's envelope"
 // decision, applied to this package's one hand-written 401 body the same
-// way todo_handler.go/keys_handler.go (this file, below) reuse it for
-// their 404 bodies.
+// way keys_handler.go (this file, below) reuses it for its 404 body.
 var jsonUnauthorizedBody = publicapi.NewErrorEnvelope("unauthorized", "authentication required", "")
 
 // RequireJSONSession gates every route under /api/bff (milestone-3/

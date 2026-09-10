@@ -1,10 +1,11 @@
 # `/api/v1` errors
 
-**The envelope, codes, and I-numbered rules below are domain-agnostic —
-`todo`/`key` mentions are just this template's current example resource,
-not a fixed part of the shape.** Update the couple of `todo` mentions
-below for your fork's own domain as part of `docs/GETTING-STARTED.md`
-Step 3's rename checklist.
+**The envelope and I-numbered rules below are domain-agnostic — `key`
+mentions are identity, not this fork's own domain.** The codes table
+below reflects this fork's real domain (story-1/ticket-11's
+`usage_events`), which has no permission-refusal case the way a
+richer example domain might — update this file again if this fork's own
+`/api/v1` surface grows a domain module with one.
 
 Every failure that reaches a handler — mapped or not — comes back as this
 envelope (`_rules/_contract/API.md`):
@@ -12,8 +13,8 @@ envelope (`_rules/_contract/API.md`):
 ```jsonc
 { "error": {
     "code": "validation_error",
-    "message": "title must be 1-200 characters",
-    "hint": "title"
+    "message": "install_id is required",
+    "hint": null
 } }
 ```
 
@@ -27,10 +28,9 @@ own error text, not a guaranteed structured field.
 | Code | HTTP | When | Carries |
 | --- | --- | --- | --- |
 | `unauthorized` | 401 | any credential failure at all (I2, I5, I9) | — |
-| `not_found` | 404 | an unknown todo id (any todo is readable/actionable by any caller, I3 no longer scopes todos — this is purely "never existed"); a key id that exists but isn't the caller's own, or never existed (I3 still scopes keys — absence, not `403`) | — |
+| `not_found` | 404 | a key id that exists but isn't the caller's own, or never existed (I3 scopes keys — absence, not `403`) | — |
 | `actor_field_present` | 400 | request tried to declare an actor (I1) | — |
-| `validation_error` | 400 | a malformed or missing field, caught either by the OpenAPI request validator or a handler's own fallback check; also an `assigned` event's `to` naming a user id that doesn't resolve (`hint: "to"`) | `hint` names the field, when the underlying error names exactly one |
-| `invalid_transition` | 403 | an agent key attempting `status_changed` to `closed` (owner-only, I18) — a real permission refusal, not a credential failure | `hint` says what to do instead: ask the owner |
+| `validation_error` | 400 | a malformed or missing field on `POST /usage-events/batch` (e.g. a missing `install_id`/`hostname`/required event field, or a stray `cost`/`source` on an event, `additionalProperties: false`), caught either by the OpenAPI request validator or the handler's own fallback check | `hint` names the field, when the underlying error names exactly one |
 
 There is no `internal_error` code documented in the contract — an
 unmapped failure is a bug in the service, not a designed response; report
@@ -46,22 +46,12 @@ indistinguishable-401 trap" before assuming the credential itself is what
 failed — an empty or unset key produces the exact same response as a
 genuinely wrong one.
 
-**404 means different things for a todo and a key.** For a key: one you
-don't own returns exactly the same `not_found` a nonexistent id would
-(I3, unchanged) — deliberate, since a `403` would leak that the row
-exists. For a todo: there is no "not yours" case left to leak — every
-todo is every caller's to read and act on — so `not_found` here only
-ever means the id never existed.
-
-**Moving a todo to `closed` is this surface's one `403` — read the hint,
-don't retry the same request, and don't rotate your key.** An agent key
-gets `invalid_transition`, not `unauthorized`: your credential is fine,
-you are simply not allowed to make this specific change. The `hint`
-tells you what to do instead (ask the owner). This is different from
-every other rejection on this surface, which is either "your credential
-is wrong" (`401`) or "this row doesn't exist" (`404`) — `invalid_transition`
-is the one case where you are correctly who you say you are, looking at
-a real row, and the answer is still no.
+**404 only ever means a key.** A key id that exists but belongs to a
+different caller returns exactly the same `not_found` a nonexistent id
+would (I3, unchanged) — deliberate, since a `403` would leak that the row
+exists. There is no other resource on this surface that a caller could
+get a 404 for: `usage_events` has no per-id lookup endpoint at all, only
+batch ingestion.
 
 **400 `actor_field_present` is a loud refusal, not a dropped field.** The
 guard checks the `X-Actor` header, and `actor` / `actorId` / `ownerId` in
@@ -83,20 +73,17 @@ error.
 
 ## What does not error
 
-**Repeating a `clientRequestId` never errors and never writes twice
-(I19).** `POST /todos`, `PATCH /todos/:id`, and `POST .../events` are all
-idempotent on it: a repeat returns the *original* write's result
-unchanged (same `200`/`201`, same body) and creates nothing new. Retrying
-a request you're unsure went through is always safe on this surface —
-there is no separate `Idempotency-Key` header to remember, the same field
-that names the write is what makes it safe to repeat.
+**Resending a `POST /usage-events/batch` never errors and never writes an
+already-ingested event twice.** Idempotent on each event's own `id`
+(`message.id`): a resend just reports a lower `inserted` count than
+`received` for the ids it had already seen — a `200`-shaped success, not
+a `409` or any other conflict code. Retrying a batch you're unsure landed
+is always safe on this surface.
 
 Revoking an already-revoked key is `404 not_found`, the same as any other
 unknown id — naturally idempotent from the caller's side with no
 special-casing needed, but that idempotency shows up as a repeat 404, not
-a repeat success. **There is no `DELETE /todos/:id` to ask the same
-question of** — it was removed in milestone-4; see `references/
-endpoints.md`.
+a repeat success.
 
 `GET /keys` lists an expired-but-unrevoked key without erroring or
 filtering it out — expiry is checked only when that key is actually

@@ -25,8 +25,8 @@ RETURNING *;
 -- existing (GOAL.md's "Owner-facing key visibility" decision). A JOIN on
 -- users from this file is a same-module reference (both api_keys and
 -- users belong to the identity module per internal/dbquery/
--- tableisolation.go's TableOwnership) so it needs no ReadOnlyGrant, unlike
--- todo_events.sql's cross-module JOIN on users.
+-- tableisolation.go's TableOwnership) so it needs no ReadOnlyGrant - a
+-- cross-module JOIN on a table owned elsewhere would.
 --
 -- milestone-4 fix-round (handle-exposure): api_keys.* PLUS users.handle -
 -- my-task's own src/app/(app)/settings/api-key-settings.tsx shows

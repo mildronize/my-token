@@ -188,8 +188,8 @@ func TestRepo_ListAPIKeysByOwner_ExcludesRevoked_IncludesExpired_OwnRowsOnly(t *
 // repo-layer proof for this package — internal/invariants_test.go's
 // TestDoneWhen12 requires a dedicated TestI3_ test inside every package
 // perDomainModuleScopePackages names, and internal/identity is one of
-// them (I3's ownership-scoping applies to key-listing/revocation, not
-// just todos). This test already existed as TestRepo_RevokeAPIKeyScoped-
+// them (I3's ownership-scoping applies directly to key-listing/
+// revocation). This test already existed as TestRepo_RevokeAPIKeyScoped-
 // ToOwner and already proved the property — renamed only, to carry the
 // naming convention the check greps for; the transport-layer half of I3
 // (404 not 403 on someone else's key) lives separately in
@@ -207,9 +207,8 @@ func TestI3_RevokeAPIKeyScopedToOwner_AbsenceNotPermission(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, key.RevokedAt)
 
-	// A different user_id can't revoke someone else's key — same
-	// "absence, not permission" shape I3 gives todos, applied here to
-	// keys.
+	// A different user_id can't revoke someone else's key — I3's
+	// "absence, not permission" shape, applied here to keys.
 	_, err = repo.RevokeAPIKey(ctx, key.ID, other.ID)
 	assert.ErrorIs(t, err, ErrNotFound)
 
@@ -354,31 +353,28 @@ func TestRepo_DisableOtherAPIKeys_RevokesEverythingExceptKeepID_ScopedToOwner(t 
 
 // TestI4_IdentityRepoOnlyQueriesUsersAndAPIKeysTables — I4 ("one seam reads
 // identity"; applied here as "one repo, one set of tables" for the
-// identity side of that boundary, mirroring
-// internal/domain/todo/repo_test.go's TestI4_TodoRepoOnlyQueriesTodosTable):
-// internal/identity's repo must only ever query users/api_keys, and must
-// never query a table that belongs to a different domain module (todos,
-// or whatever a fork replaces it with) — except through an explicit,
+// identity side of that boundary): internal/identity's repo must only
+// ever query users/api_keys, and must never query a table that belongs
+// to a different domain module — except through an explicit,
 // mechanically-enforced read-only grant (dbquery.ReadOnlyGrants).
 //
 // Checked statically against the sqlc query source each repo.go is
 // generated from (db/queries/*.sql), via internal/dbquery — the single
-// shared implementation behind this check and internal/domain/todo's
-// equivalent, so the two can't drift into two different (and, as task-8
-// found, differently buggy) copies of the same logic. Ownership is an
-// explicit map (dbquery.TableOwnership), never derived by scanning other
-// files' content — see internal/dbquery's own doc comment for why an
-// earlier, scan-and-guess version of this mechanism got two things wrong:
-// first a hardcoded forbidden-table list that passed vacuously once a
-// fork's tables changed underneath it, then (milestone-4) a heuristic
-// that could not tell a legitimate cross-module read from an ownership
-// claim, misattributing "users" to todo_events.sql because its feed
-// query legitimately JOINs it.
+// shared implementation behind this check and every domain module's own
+// equivalent, so they can't drift into differently buggy copies of the
+// same logic. Ownership is an explicit map (dbquery.TableOwnership),
+// never derived by scanning other files' content — see internal/dbquery's
+// own doc comment for why an earlier, scan-and-guess version of this
+// mechanism got two things wrong: first a hardcoded forbidden-table list
+// that passed vacuously once a fork's tables changed underneath it, then
+// (milestone-4) a heuristic that could not tell a legitimate cross-module
+// read from an ownership claim, misattributing "users" to a query file
+// that legitimately JOINed it for a display read.
 //
 // This is I4's dedicated identity-module test, added in task-7 once
 // _contract/INVARIANTS.md tagged I4 `scope: per-domain-module`
-// (internal/invariants_test.go): before that, internal/todo's
-// TestI4_TodoRepoOnlyQueriesTodosTable happened to already check
+// (internal/invariants_test.go): before that, the milestone-1-era example
+// domain module's own equivalent test happened to already check
 // users.sql/api_keys.sql too, so I4 had real coverage for identity's
 // tables — but that coverage lived entirely outside internal/identity's
 // own package, which is exactly the gap task-7's per-domain-module scope

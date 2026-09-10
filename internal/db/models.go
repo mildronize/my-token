@@ -19,30 +19,6 @@ type ApiKey struct {
 	RevokedAt sql.NullTime `json:"revoked_at"`
 }
 
-type Todo struct {
-	ID         string         `json:"id"`
-	CreatedBy  string         `json:"created_by"`
-	Title      string         `json:"title"`
-	Status     string         `json:"status"`
-	AssigneeID sql.NullString `json:"assignee_id"`
-	Priority   sql.NullString `json:"priority"`
-	DueDate    sql.NullTime   `json:"due_date"`
-	CreatedAt  time.Time      `json:"created_at"`
-	UpdatedAt  time.Time      `json:"updated_at"`
-}
-
-type TodoEvent struct {
-	ID              string         `json:"id"`
-	TodoID          string         `json:"todo_id"`
-	Seq             int64          `json:"seq"`
-	ActorID         string         `json:"actor_id"`
-	Type            string         `json:"type"`
-	Payload         sql.NullString `json:"payload"`
-	Body            sql.NullString `json:"body"`
-	ClientRequestID string         `json:"client_request_id"`
-	CreatedAt       time.Time      `json:"created_at"`
-}
-
 type UsageEvent struct {
 	ID                       string    `json:"id"`
 	SessionID                string    `json:"session_id"`

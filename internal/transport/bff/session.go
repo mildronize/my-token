@@ -1,9 +1,9 @@
 // Package bff is the owner-facing transport surface (task-4.md,
 // _contract/API.md's BFF section): GET /login, GET /callback, and the
-// minimal authenticated view of the caller's own todos, all
-// session-cookie-gated. Per ARCHITECTURE.md this package may import gin
-// (it's transport) and internal/domain/todo + internal/identity (both are
-// what it composes) — it must never be imported by either of those.
+// session-cookie-gated /api/bff JSON surface (keys, users, story-1/
+// ticket-14's usage console reads). Per ARCHITECTURE.md this package may
+// import gin (it's transport) and the domain modules/internal/identity it
+// composes — it must never be imported by any of those.
 package bff
 
 import (

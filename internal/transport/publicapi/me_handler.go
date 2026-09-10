@@ -18,8 +18,8 @@ type meResponse struct {
 // (task-2 hand-wired it directly on the gin group before that file
 // existed) — task-3 brought it onto the same generated-interface,
 // openapi-validated path as every other endpoint instead of leaving it on
-// a bespoke route, by embedding MeServer alongside TodoServer (and
-// KeysServer) in cmd/server's composite api.ServerInterface
+// a bespoke route, by embedding MeServer alongside KeysServer (and every
+// other domain's own adapter) in cmd/server's composite api.ServerInterface
 // implementation. The underlying handleMe function, and its
 // behavior/tests, are unchanged by this file's move out of
 // internal/identity (ARCHITECTURE.md — identity keeps no transport code).

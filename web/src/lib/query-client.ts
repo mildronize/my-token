@@ -1,6 +1,6 @@
 // TPL-1 milestone-3/task-3: one shared QueryClient instance for the whole
 // SPA — TanStack Query is now the data layer behind every BFF-backed hook
-// (auth-client.ts's useSession, lib/todos.ts, lib/keys.ts), replacing
+// (auth-client.ts's useSession, lib/keys.ts, lib/usage.ts), replacing
 // tRPC's own React Query integration (my-task's src/trpc/react.tsx,
 // TRPCReactProvider) now that tRPC itself is out of scope entirely
 // (GOAL.md's Decisions table: "Not carried: tRPC ... The SPA talks to the

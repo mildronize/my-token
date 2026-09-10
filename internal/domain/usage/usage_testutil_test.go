@@ -13,7 +13,7 @@ import (
 )
 
 // repoRootForTests resolves the module root from this test file's own
-// location (mirrors internal/domain/todo's todo_testutil_test.go), so
+// location (mirrors every other domain module's own testutil), so
 // tests work regardless of the directory `go test` is invoked from.
 func repoRootForTests(t *testing.T) string {
 	t.Helper()
@@ -41,8 +41,7 @@ func newTestDB(t *testing.T) *sql.DB {
 	return conn
 }
 
-// countRows returns table's current row count — mirrors
-// internal/domain/todo's own countRows helper, used here to assert
+// countRows returns table's current row count — used here to assert
 // idempotency directly (a repeat id must not add a second row) rather
 // than inferring it from a returned count alone.
 func countRows(t *testing.T, conn *sql.DB, table string) int {

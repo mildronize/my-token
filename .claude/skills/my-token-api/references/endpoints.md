@@ -5,16 +5,12 @@ API.md` — where a fork's actual code and this file might ever disagree,
 `openapi.yaml` is the source of truth, since every request is validated
 against it before a handler runs at all (see "Request validation" below).
 
-**`/todos` below is this template's example domain, not a fixed part of
-the surface** — update this file for your fork's own paths/fields as part
-of `docs/GETTING-STARTED.md` Step 3's rename checklist (`GET /me`, `GET
-/keys`, and `DELETE /keys/:id` stay as-is; they're identity, not the
-example domain).
+**`/usage-events/batch` below is this fork's own real domain
+(story-1/ticket-11), not a template placeholder** — `GET /me`, `GET
+/keys`, and `DELETE /keys/:id` are identity, unrelated to it.
 
 Every path below is relative to `$BASE_URL`. Every request carries
-`Authorization: Bearer <credential>`. Every `POST`/`PATCH` carries a
-`clientRequestId` too (I19) — see the main `SKILL.md`'s "Rules every
-request obeys".
+`Authorization: Bearer <credential>`.
 
 ---
 
@@ -32,152 +28,51 @@ carry `owner`.
 
 ---
 
-## `GET /todos`
+## `POST /usage-events/batch` → **201**
 
-No parameters, no pagination (deliberate simplification, flagged in
-`_rules/_contract/API.md`). **Every todo, not just the caller's own** —
-milestone-4 made todos a shared collection every agent and the owner act
-on together (I3 no longer applies here); `created_at` descending.
-
-```jsonc
-{ "todos": [
-    { "id": "3f9c2e10-…", "title": "Export CSV endpoint",
-      "status": "open", "assigneeId": null, "assigneeHandle": null,
-      "priority": "high", "dueDate": null,
-      "createdBy": "8b1e4f2a-…",
-      "createdAt": "2026-08-12T16:34:11Z", "updatedAt": "2026-08-12T16:34:11Z" }
-] }
-```
-
-`status` is a fixed four-value enum: `open` | `in_progress` | `done` |
-`closed` — not an owner-editable table. `createdBy` is attribution only
-(who made it), never access-scoping — every caller sees and can act on
-every todo regardless of who created it.
-
----
-
-## `POST /todos` → **201**
+story-1/ticket-11's core ingestion endpoint — a running collector
+installation POSTs new events since its last successful send. Idempotent
+on each event's own `id` (`message.id`, ticket 9's dedup key — never the
+source JSONL record's own `uuid`): a resend of an already-ingested id
+changes nothing.
 
 ```jsonc
 {
-  "title": "Export CSV endpoint",       // required, 1-200 characters
-  "clientRequestId": "…",               // required (I19)
-  "assigneeId": null,                   // optional
-  "priority": "high",                   // optional: low | medium | high | urgent
-  "dueDate": null                       // optional, ISO 8601
+  "install_id": "6f1e2a3b-…",   // the collector's own install_id (UUID)
+  "hostname": "thw-home",
+  "events": [
+    {
+      "id": "msg_01AbC…",                    // message.id — the idempotency key
+      "session_id": "sess_…",
+      "actor": "freya",                      // which crew-home produced this session
+      "path": "/home/thw-home/gits/my-token",
+      "machine": "6f1e2a3b-…",                // = install_id
+      "model": "claude-sonnet-4-5-20250929",
+      "input_tokens": 1200,
+      "output_tokens": 340,
+      "cache_read_input_tokens": 800,
+      "cache_creation_input_tokens": 0,
+      "timestamp": "2026-09-10T09:00:00Z"     // when the turn actually happened
+    }
+  ]
 }
 ```
 
-`createdBy` is always the resolved actor — never accepted from the body
-(I1; the actor-guard middleware rejects `owner`/`actor`/`createdBy`
-upstream of the handler). **`status` is not accepted here** — every new
-todo starts `open`, deliberately (change it afterward through an event,
-below); sending `done` (the pre-milestone-4 field) is a
-`400 validation_error`, not silently dropped. Returns the created todo,
-same shape as `GET /todos/:id`.
-
-A missing or out-of-range `title`, or a stray unrecognised field, is
-rejected by the OpenAPI request validator before this handler ever runs —
-see "Request validation" below.
-
----
-
-## `GET /todos/:id`
-
-**No longer owner-scoped** — any authenticated caller may read any todo
-by id (I3 no longer applies to this domain). An id that never existed is
-**404 `not_found`** — there's no "wrong owner" case left to distinguish
-from "never existed", so there's nothing for a `403` to protect either.
+`cost` and `source` have no properties on `UsageEventInput` at all
+(`additionalProperties: false`) — sending either is a `400
+validation_error`, not silently dropped. The server computes `cost`
+itself (the ported pricing table) and always sets `source:
+"claude_code"`. `install_id`/`hostname` identify the reporting collector
+for observability only; they are not threaded into the stored event rows.
 
 ```jsonc
-{ "id": "3f9c2e10-…", "title": "Export CSV endpoint",
-  "status": "open", "assigneeId": null, "assigneeHandle": null,
-  "priority": "high", "dueDate": null,
-  "createdBy": "8b1e4f2a-…",
-  "createdAt": "2026-08-12T16:34:11Z", "updatedAt": "2026-08-12T16:34:11Z" }
+{ "received": 1, "inserted": 1 }
 ```
 
----
-
-## `PATCH /todos/:id`
-
-**Renames only, as of milestone-4** — `status`/`assigneeId`/`priority`/
-`dueDate` all moved to `POST .../events` below, the single write path
-their permission/audit requirements actually need (I15/I18):
-
-```jsonc
-{ "title": "…", "clientRequestId": "…" }   // both required
-```
-
-Sending `done` is a `400 validation_error`, same reasoning as `POST`
-above. No longer owner-scoped, same 404 rule as `GET`. Returns the
-updated todo, same shape as `GET /todos/:id`.
-
----
-
-## `POST /todos/:id/events` → **201** — append to this todo's timeline (I15)
-
-**There is no `DELETE /todos/:id` any more** — removed in milestone-4.
-Finishing a todo means posting a `status_changed` event with `to: "closed"`
-here, not deleting the row; the old `DELETE` path is a genuine `404` now
-(no route registered), never a `405`.
-
-One body shape, `type` picks which fields matter — always with
-`clientRequestId` (I19: a repeated id returns the original event
-unchanged and writes nothing new):
-
-```jsonc
-// commented — body required
-{ "type": "commented", "body": "blocked on the CSV lib", "clientRequestId": "…" }
-
-// status_changed — to is one of open | in_progress | done | closed.
-// Moving to "closed" is owner-only (I18): an agent key gets
-// 403 invalid_transition, with a hint — not 401, your credential is fine.
-{ "type": "status_changed", "to": "in_progress", "clientRequestId": "…" }
-
-// assigned — to is the new assignee's user id, or null to unassign
-{ "type": "assigned", "to": "8b1e4f2a-…", "clientRequestId": "…" }
-// an unresolvable "to" id is 400 validation_error, not silently stored
-
-// field_changed — field is priority | dueDate | title
-{ "type": "field_changed", "field": "priority", "to": "urgent", "clientRequestId": "…" }
-```
-
-`type: "created"` (and any other value this endpoint doesn't recognise)
-is **rejected** — `400 validation_error` — the same path for both, not a
-special case for `"created"` (I16): a `created` event only ever happens
-as `POST /todos`'s own side effect, never as something a caller asks for
-directly. Returns the created event:
-
-```jsonc
-{ "id": "…", "todoId": "3f9c2e10-…", "seq": 3, "actorId": "8b1e4f2a-…",
-  "actorHandle": "luna", "type": "status_changed",
-  "payload": { "from": "open", "to": "in_progress" }, "body": null,
-  "clientRequestId": "…", "createdAt": "2026-08-13T10:00:00Z" }
-```
-
-`assigned`'s `payload.from`/`payload.to` are each either `null` or an
-`{id, handle}` snapshot resolved once, at write time — a later handle
-change never rewrites an old event's history.
-
----
-
-## `GET /todos/:id/events`
-
-This todo's own timeline, oldest first (the newest-first cross-todo feed
-is `bff`-only, not on this surface):
-
-```jsonc
-{ "events": [
-    { "id": "…", "todoId": "3f9c2e10-…", "seq": 1, "actorId": "8b1e4f2a-…",
-      "actorHandle": "luna", "type": "created", "payload": { "title": "…" },
-      "body": null, "clientRequestId": "…", "createdAt": "2026-08-13T09:00:00Z" }
-] }
-```
-
-`type: "created"` appears here as a read value even though `POST
-.../events` above rejects it as a write — it's the one event type only
-`POST /todos` itself can produce.
+`received` is how many events the batch named, duplicates included.
+`inserted` is how many were newly written — `received - inserted` is
+exactly how many ids this batch named were already ingested by a prior
+call.
 
 ---
 

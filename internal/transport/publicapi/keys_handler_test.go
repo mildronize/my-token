@@ -24,12 +24,13 @@ import (
 // DELETE /keys/:id integration tests. It mounts KeysServer's two routes
 // directly on the gin group rather than going through the full generated
 // api.RegisterHandlers (which would require these keys-only tests to also
-// implement internal/domain/todo's ServerInterface methods —
-// todo_handler_test.go already covers the composite-registration path end
-// to end). The openapi.yaml request validator matches requests against
-// the spec's own path templates, independent of gin's route table, so
-// this still exercises the same validated-shape guarantee (Done-when 7)
-// the composite wiring gives /todos and /me.
+// implement every other domain module's own ServerInterface methods —
+// newIntegrationRouter, publicapi_testutil_test.go, already covers the
+// composite-registration path end to end). The openapi.yaml request
+// validator matches requests against the spec's own path templates,
+// independent of gin's route table, so this still exercises the same
+// validated-shape guarantee (Done-when 7) the composite wiring gives
+// every other endpoint.
 func newKeysIntegrationRouter(t *testing.T) (*gin.Engine, *sql.DB) {
 	t.Helper()
 	conn := newTestDB(t)
@@ -99,11 +100,9 @@ func TestHandler_KeysListAndRevokeRoundTrip(t *testing.T) {
 }
 
 // TestI3_HandlerOwnershipScoping_ReturnsNotFoundNotForbidden_Keys — I3, at
-// the HTTP layer, applied to keys instead of todos (a second resource, not
-// a duplicate of todo_handler_test.go's version of this test): a key
-// belonging to a different owner returns 404 (not_found), the exact same
-// response as an id that never existed. Never 403 — that would confirm
-// the row exists.
+// the HTTP layer, applied to keys: a key belonging to a different owner
+// returns 404 (not_found), the exact same response as an id that never
+// existed. Never 403 — that would confirm the row exists.
 func TestI3_HandlerOwnershipScoping_ReturnsNotFoundNotForbidden_Keys(t *testing.T) {
 	router, conn := newKeysIntegrationRouter(t)
 	ownerID, ownerKey := createAgentWithKey(t, conn, "owner")

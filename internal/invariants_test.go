@@ -52,11 +52,11 @@ var invariantHeadingRe = regexp.MustCompile(`(?m)^\*\*I(\d+) —.*$`)
 //     sweep — I3/I4's actual shape) with "applies to exactly one
 //     specific place" (I15-I19, I21's actual shape). The old
 //     per-domain-module tag only "worked" for I15-I19/I21 by coincidence,
-//     because domainModuleNames() had exactly one member (todo) — the
+//     because domainModuleNames() had exactly one member at the time — the
 //     moment I21 (an internal/identity-only invariant) got tagged
 //     per-domain-module, a correctly-placed TestI21_ in internal/identity
-//     would not satisfy the check, and a wrong-location stub under
-//     internal/domain/todo would. <name> is free-form (letters, digits,
+//     would not satisfy the check, and a wrong-location stub under that
+//     one domain module would. <name> is free-form (letters, digits,
 //     "_", "-") purely so INVARIANTS.md can name a domain without this
 //     regex needing to change; the mapping from <name> to an actual
 //     package is intentionally NOT derived from it — see
@@ -225,24 +225,21 @@ func hasTestWithPrefix(names []string, prefix string) bool {
 // internal/domain/<name>) because not every name lives there:
 // internal/identity is deliberately its own layer, not a domain module
 // (_rules/_standard/ARCHITECTURE.md's milestone-2 decision), so
-// "domain:identity" has to be wired to internal/identity by hand, the
-// same as "domain:todo" is wired to internal/domain/todo.
+// "domain:identity" has to be wired to internal/identity by hand.
 //
 // An unrecognized name must never resolve here — TestDoneWhen12 treats a
 // lookup miss as a loud abort (require.Truef), not "no package to
 // check," because a domain:<name> tag that silently resolved to nothing
 // would make that invariant's coverage requirement a no-op that passes
-// trivially — the exact failure shape I15's own floor-of-zero bug and the
+// trivially — the exact failure shape a floor-of-zero bug and the
 // sqlc-ignores-Down measurement were both found and fixed for elsewhere
 // this milestone. TestDomainScopePackageNames_UnknownNameDoesNotResolve
 // below proves this by direct example, not by inspection; the full
 // end-to-end abort (TestDoneWhen12 itself failing given a bogus tag in a
 // real INVARIANTS.md) is attacked by hand once during review (builder
-// report), the same split TestI15Floor_CanActuallyFail already
-// establishes for I15's own floor check.
+// report) instead.
 func domainScopePackageNames(root string) map[string]string {
 	return map[string]string{
-		"todo":     filepath.Join(root, "internal", "domain", "todo"),
 		"identity": filepath.Join(root, "internal", "identity"),
 	}
 }
@@ -283,15 +280,11 @@ func TestDomainScopePackageNames_UnknownNameDoesNotResolve(t *testing.T) {
 // notice and add the line.
 func perDomainModuleScopePackages(root string) map[string]string {
 	return map[string]string{
-		// The todo domain module: I3's ownership-scoping and I4's
-		// single-seam-identity-read properties both apply to it
-		// directly.
-		"todo": filepath.Join(root, "internal", "domain", "todo"),
 		// story-1/ticket-11: usage_events is collector-reported, not
-		// owned by an authenticated user (I3's reach narrows away, the
-		// same way it already did for todo — see usage/repo_test.go's
-		// own TestI3_ test), but I4's "one repo, one table" property
-		// still applies directly (usage/repo_test.go's TestI4_ test).
+		// owned by an authenticated user (I3's reach narrows away — see
+		// usage/repo_test.go's own TestI3_ test), but I4's "one repo, one
+		// table" property still applies directly (usage/repo_test.go's
+		// TestI4_ test).
 		"usage": filepath.Join(root, "internal", "domain", "usage"),
 		// internal/identity is deliberately not under internal/domain/
 		// (ARCHITECTURE.md's milestone-2 decision) but owns the
@@ -352,17 +345,18 @@ func TestPerDomainModuleScopeCoversEveryDomainModule(t *testing.T) {
 // every TestI3_ test out of its new internal/bookmark module and watching
 // the suite stay green anyway.
 //
-// A `domain:<name>`-scope invariant (I15-I19, I21, since the fix-round)
-// requires a TestI<N>_ test inside the one specific package <name>
-// resolves to (domainScopePackageNames, above) — not a coverage sweep
-// like per-domain-module, an address. This exists because
-// per-domain-module originally conflated the two: I15-I19/I21 each
-// belong to exactly one place (I15-I19 to internal/domain/todo, I21 to
-// internal/identity), and tagging them per-domain-module only "worked"
-// because domainModuleNames() had exactly one member (todo) — the moment
-// I21 needed a test in internal/identity specifically, per-domain-module
-// would have accepted a wrong-location stub under internal/domain/todo
-// instead of demanding the real thing.
+// A `domain:<name>`-scope invariant (I21, since the fix-round; the
+// example domain module's own I15-I19 carried this tag too, before
+// story-1/ticket-16 deleted both the module and its invariants) requires
+// a TestI<N>_ test inside the one specific package <name> resolves to
+// (domainScopePackageNames, above) — not a coverage sweep like
+// per-domain-module, an address. This exists because per-domain-module
+// originally conflated the two: each domain:<name> invariant belongs to
+// exactly one place, and tagging one per-domain-module only "worked"
+// while domainModuleNames() had exactly one member — the moment I21
+// needed a test in internal/identity specifically, per-domain-module
+// would have accepted a wrong-location stub under the other domain
+// module instead of demanding the real thing.
 //
 // task-2 supplied I1, I2, I5-I10; task-3 supplied I3, I4; the fix-round
 // re-scoped I15-I19 and I21 from per-domain-module to domain:<name> so
@@ -383,7 +377,7 @@ func TestPerDomainModuleScopeCoversEveryDomainModule(t *testing.T) {
 // Second known limitation, same section of the doc (task-9, Clara's fifth
 // blind fork test): per-domain-module scope (above) requires *some*
 // TestI<N>_ test in the module's package, not one per layer. This repo's
-// own convention (internal/domain/todo) writes a separate
+// own domain modules write a separate
 // TestI3_Repo.../TestI3_Service.../TestI3_Handler... per module — but
 // nothing here requires that granularity, so renaming away only the
 // repo-layer test (leaving service/handler's alone) stays invisible to

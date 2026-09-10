@@ -5,7 +5,7 @@
 // internal/transport/publicapi instead, since this package holds no
 // transport code (ARCHITECTURE.md — "Why identity is not under domain/",
 // which explains why identity is its own top-level layer even though it,
-// like a domain module, keeps no HTTP-facing code of its own). Unlike
-// internal/domain/todo, keep this directory on fork — every service built
-// from this template needs its own identity/auth seam.
+// like a domain module, keeps no HTTP-facing code of its own). Unlike a
+// domain module, keep this directory on fork — every service built from
+// this template needs its own identity/auth seam.
 package identity

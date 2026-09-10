@@ -84,10 +84,9 @@ func TestRepo_InsertBatch_ResendAcrossCalls_ChangesNothing(t *testing.T) {
 	assert.Equal(t, 1, countRows(t, conn, "usage_events"))
 }
 
-// TestI3_UsageEventsScopingDoesNotApplyToThisDomain — same shape as
-// internal/domain/todo's own TestI3_GetByIDReadsAnyCreator_
-// ScopingRetiredForThisDomain: usage_events carries no owner/creator
-// reference at all (it's a machine-reported fact about a session, not a
+// TestI3_UsageEventsScopingDoesNotApplyToThisDomain: usage_events
+// carries no owner/creator reference at all (it's a machine-reported
+// fact about a session, not a
 // resource an authenticated user owns), so there is no "wrong owner"
 // lookup for I3 to ever have applied to in the first place. Named with
 // the TestI3_ prefix per internal/invariants_test.go's TestDoneWhen12,
@@ -118,9 +117,8 @@ func TestI3_UsageEventsScopingDoesNotApplyToThisDomain(t *testing.T) {
 
 // TestI4_UsageRepoOnlyQueriesUsageEventsTable — I4 ("one seam reads
 // identity"; "one repo, one table") — db/queries/usage_events.sql must
-// only ever reference the usage_events table. Mirrors
-// internal/domain/todo/repo_test.go's own TestI4_TodoRepoOnlyQueriesTodosTable
-// exactly; internal/invariants_test.go's TestDoneWhen12 requires this
+// only ever reference the usage_events table.
+// internal/invariants_test.go's TestDoneWhen12 requires this
 // test to exist inside every domain module's own package
 // (perDomainModuleScopePackages, updated for this module in
 // internal/invariants_test.go).

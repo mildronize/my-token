@@ -10,7 +10,6 @@ package internal
 
 import (
 	"encoding/json"
-	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
@@ -22,7 +21,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -70,12 +68,12 @@ func repoRoot(t *testing.T) string {
 // exclude infrastructure directories (api, db, dbquery, platform) by
 // name: the domain/transport split means domain discovery now only ever
 // looks somewhere infrastructure never lives, so there is nothing left to
-// exclude. A fork that renames internal/domain/todo, adds
-// internal/domain/note beside it, or removes internal/domain/todo
-// entirely gets correct coverage automatically (task-6.md, milestone-1: a
-// hardcoded {internal/todo, internal/identity} list gave a fork that
-// added a third domain module zero import-rule coverage on it — the
-// guardrail failing exactly the case this template exists to prove out).
+// exclude. A fork that renames one domain module, adds another beside
+// it, or removes one entirely gets correct coverage automatically
+// (task-6.md, milestone-1: a hardcoded {internal/todo, internal/identity}
+// list gave a fork that added a third domain module zero import-rule
+// coverage on it — the guardrail failing exactly the case this template
+// exists to prove out).
 //
 // internal/invariants_test.go's TestDoneWhen12_EveryInvariantHasANamedTest
 // calls this exact function for its own per-domain-module invariant check
@@ -293,10 +291,10 @@ func goListPackages(t *testing.T, root string) map[string]goListPackage {
 // a domain module may never import another domain module — what actually
 // makes "fork = delete one domain, add another" true (ARCHITECTURE.md).
 // domainModuleNames is filesystem-derived, so with exactly one domain
-// module (todo) as of this task, there is nothing to violate yet; this
-// rule is only proven real by a scratch-clone attack with a fake second
-// domain module (see task-1's builder report), not by this test staying
-// green on today's tree.
+// module as of task-1 (milestone-2), there was nothing to violate yet;
+// this rule was only proven real by a scratch-clone attack with a fake
+// second domain module (see task-1's builder report), not by this test
+// staying green on that tree.
 func TestArchitecture_DomainModulesNeverImportSiblingDomains(t *testing.T) {
 	root := repoRoot(t)
 	module := modulePath(t, root)
@@ -368,171 +366,6 @@ func TestArchitecture_DomainAndIdentityNeverImportTransport(t *testing.T) {
 			}
 		}
 	}
-}
-
-// --- I15's table-specific check (milestone-4, task-2) --------------------
-//
-// TestArchitecture_OnlyRepoFilesImportSqlc (rule 2, above) is a *layer*
-// check: only repo.go/*_repo.go may import internal/db at all. It does not
-// stop a repo file in one module from querying another module's table by
-// name — INVARIANTS.md I15 states this gap plainly rather than leaving it
-// implicit. The check below restores the actual table-level property for
-// todo_events specifically: only internal/domain/todo's own repo file may
-// ever reference the generated *TodoEvent*-named query functions, by name,
-// anywhere in this codebase.
-
-// todoEventQueryFunctionNames returns every method internal/db's generated
-// code defines (a *ast.FuncDecl with a receiver — i.e. an actual
-// implementation, not Querier's interface method list, which is a
-// declaration with no receiver and would double-count these names for no
-// reason) whose name contains "TodoEvent". Parsed via go/parser the same
-// way fileImports already does in this file, so a name that only appears
-// inside a comment is structurally never picked up here — only a real
-// func declaration counts.
-func todoEventQueryFunctionNames(t *testing.T, root string) []string {
-	t.Helper()
-	dbDir := filepath.Join(root, "internal", "db")
-	entries, err := os.ReadDir(dbDir)
-	require.NoErrorf(t, err, "reading %s", dbDir)
-
-	fset := token.NewFileSet()
-	var names []string
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
-			continue
-		}
-		path := filepath.Join(dbDir, entry.Name())
-		f, err := parser.ParseFile(fset, path, nil, 0)
-		require.NoErrorf(t, err, "parsing %s", path)
-		for _, decl := range f.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Recv == nil {
-				continue
-			}
-			if strings.Contains(fn.Name.Name, "TodoEvent") {
-				names = append(names, fn.Name.Name)
-			}
-		}
-	}
-	return names
-}
-
-// meetsI15Floor is I15's own floor rule (INVARIANTS.md: "must first assert
-// it found at least 3 such functions ... before it asserts who references
-// them") pulled out into its own tiny, independently testable predicate —
-// see TestI15Floor_CanActuallyFail, which exercises it directly rather
-// than trusting the >= expression below was written correctly by
-// inspection alone.
-func meetsI15Floor(count int) bool {
-	return count >= 3
-}
-
-// todoEventFunctionReferences returns every name in names that path's
-// source references as a selector call target (the `Name` half of an
-// `x.Name(...)` expression), via go/ast — not a substring or regexp match
-// against the raw file text. Two consequences that matter here: a doc
-// comment that merely mentions a function name (this file's own comments
-// among them — see the block comment above) is never mistaken for a real
-// reference, since comments aren't part of the parsed expression tree; and
-// a func *declaration* of the same name (internal/db's own definition
-// site) doesn't count as a "reference" to itself either, since a
-// declaration's name is an *ast.Ident under FuncDecl, never a
-// SelectorExpr.
-func todoEventFunctionReferences(t *testing.T, path string, names map[string]bool) []string {
-	t.Helper()
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, nil, 0)
-	require.NoErrorf(t, err, "parsing %s", path)
-
-	var found []string
-	ast.Inspect(f, func(n ast.Node) bool {
-		sel, ok := n.(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
-		if names[sel.Sel.Name] {
-			found = append(found, sel.Sel.Name)
-		}
-		return true
-	})
-	return found
-}
-
-// TestI15Floor_CanActuallyFail proves meetsI15Floor's >= expression really
-// does flip to false below the design's stated floor, rather than trusting
-// it was written correctly by inspection — the exact failure shape
-// INVARIANTS.md I15 warns about by name ("a name-matcher that matches zero
-// functions passes trivially and enforces nothing... the same shape
-// keys_handler_test.go already cost this project once"). Exercised
-// directly against the predicate at every boundary (0, 1, 2, 3, 4) rather
-// than by physically deleting query functions from internal/db on every
-// test run — that attack is done by hand once during review (builder
-// report), not baked into the suite as a standing mutation.
-func TestI15Floor_CanActuallyFail(t *testing.T) {
-	assert.False(t, meetsI15Floor(0), "zero matched functions must fail the floor, not pass trivially")
-	assert.False(t, meetsI15Floor(1))
-	assert.False(t, meetsI15Floor(2))
-	assert.True(t, meetsI15Floor(3), "3 is the design's own stated floor: insert, list-per-todo, list-cross-todo-feed")
-	assert.True(t, meetsI15Floor(4))
-}
-
-// TestArchitecture_OnlyTodoRepoReferencesTodoEventQueries is I15's own
-// enforcement fix. Floor-first, per I15's own explicit reasoning: asserting
-// "found at least 3 functions" before asserting "only repo.go references
-// them" means a matcher that (by a rename, or a later refactor) stops
-// matching anything fails loud here instead of silently certifying an
-// import graph it no longer actually inspects.
-func TestArchitecture_OnlyTodoRepoReferencesTodoEventQueries(t *testing.T) {
-	root := repoRoot(t)
-
-	functionNames := todoEventQueryFunctionNames(t, root)
-	require.GreaterOrEqualf(t, len(functionNames), 3,
-		"expected at least 3 TodoEvent-named sqlc query functions in internal/db "+
-			"(I15's own floor: insert, list-per-todo, list-cross-todo-feed) — found %d: %v. "+
-			"A matcher that finds zero functions would pass the reference-check below trivially "+
-			"and enforce nothing (INVARIANTS.md I15).",
-		len(functionNames), functionNames)
-	require.Truef(t, meetsI15Floor(len(functionNames)),
-		"meetsI15Floor disagrees with the >= 3 assertion just above — should never happen")
-
-	nameSet := make(map[string]bool, len(functionNames))
-	for _, name := range functionNames {
-		nameSet[name] = true
-	}
-
-	allowedDir := filepath.Join(root, "internal", "domain", "todo")
-	dbDir := filepath.Join(root, "internal", "db")
-	internalDir := filepath.Join(root, "internal")
-
-	err := filepath.WalkDir(internalDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") {
-			return nil
-		}
-
-		dir := filepath.Dir(path)
-		if dir == dbDir {
-			return nil // internal/db is the definition site, not a reference
-		}
-		if dir == allowedDir && repoFileRe.MatchString(filepath.Base(path)) {
-			return nil // repo.go/*_repo.go inside internal/domain/todo — the one allowed caller
-		}
-
-		for _, name := range todoEventFunctionReferences(t, path, nameSet) {
-			t.Errorf(
-				"%s: references %q — only internal/domain/todo's own repo file may reference the "+
-					"todo_events sqlc query functions (INVARIANTS.md I15's table-specific check)",
-				path, name,
-			)
-		}
-		return nil
-	})
-	require.NoError(t, err)
 }
 
 // TestArchitecture_PlatformNeverImportsDomainIdentityOrTransport enforces

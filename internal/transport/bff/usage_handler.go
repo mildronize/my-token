@@ -13,7 +13,7 @@ import (
 // UsageServer adapts usage.Service's read side to internal/bffapi's
 // generated ServerInterface's usage-shaped subset (GetUsageSummary,
 // GetUsageWindows) — story-1/ticket-14's console read surface. Mirrors
-// TodoServer/UsersServer's own shape: a thin adapter, no business logic
+// KeysServer/UsersServer's own shape: a thin adapter, no business logic
 // of its own (WindowBounds/Aggregate, both in internal/domain/usage, do
 // all of it). Owner-session only, the same tier as every other endpoint
 // on this surface (bffOwnerID below) — there is no publicapi equivalent
@@ -66,7 +66,7 @@ func toWireBreakdown(rows []usage.BreakdownRow) []bffapi.UsageBreakdownRow {
 // reached, so ParseWindow/ParseGroupBy failing here is unreachable in
 // practice; it's still checked, not assumed, the same defensive-fallback
 // convention every other handler in this package follows for its own
-// request validator (e.g. CreateTodo's ShouldBindJSON comment).
+// request validator.
 func (s *UsageServer) GetUsageSummary(c *gin.Context, params bffapi.GetUsageSummaryParams) {
 	if _, ok := bffOwnerID(c); !ok {
 		return

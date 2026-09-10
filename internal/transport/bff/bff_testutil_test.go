@@ -27,7 +27,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/mildronize/my-token/internal/bffapi"
-	"github.com/mildronize/my-token/internal/domain/todo"
 	"github.com/mildronize/my-token/internal/domain/usage"
 	"github.com/mildronize/my-token/internal/identity"
 	"github.com/mildronize/my-token/internal/platform"
@@ -48,9 +47,9 @@ func repoRootForTests(t *testing.T) string {
 }
 
 // newTestDB opens a fresh temp-file SQLite database and applies every
-// migration under db/migrations via goose, mirroring internal/domain/
-// todo's and internal/transport/publicapi's own testutils — this
-// package's tests are integration tests against a real schema, not fakes.
+// migration under db/migrations via goose, mirroring internal/transport/
+// publicapi's own testutil — this package's tests are integration tests
+// against a real schema, not fakes.
 func newTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 
@@ -74,11 +73,9 @@ func testLogger() *slog.Logger {
 }
 
 // seedUser inserts a users row directly (bypassing internal/identity's own
-// repo, the same reasoning internal/domain/todo's testutil gives for its
-// own raw-INSERT fixture helper: these tests shouldn't need to trust a
-// second package's write path just to set up a fixture, and a plain
-// INSERT keeps the I4 table-ownership boundary these tests partly exist to
-// demonstrate).
+// repo): these tests shouldn't need to trust a second package's write
+// path just to set up a fixture, and a plain INSERT keeps the I4
+// table-ownership boundary these tests partly exist to demonstrate.
 func seedUser(t *testing.T, conn *sql.DB, role, ssoSubject string, active bool) identity.User {
 	t.Helper()
 	now := time.Now().UTC()
@@ -228,15 +225,15 @@ func newIDVerifier(t *testing.T, f *fakeIDP) identity.JWTVerifier {
 //
 // milestone-3/task-3 removed view_handler.go (the old Go-html/template
 // owner view, replaced by the embedded SPA) and its own GET / route
-// registration that used to live here — todoSvc is still accepted for the
-// /api/bff group's TodoServer, below.
+// registration that used to live here.
 //
 // identitySvc (milestone-3/task-2, new) backs the /api/bff group's
-// KeysServer (ListKeys/RevokeKey) the same way todoSvc backs its
-// TodoServer — nil is an acceptable value for any test that only
-// exercises the todo or me endpoints, since KeysServer.Service is never
-// dereferenced unless a keys route is actually hit.
-func newTestRouter(cfg *platform.Config, signer *Signer, idVerifier identity.JWTVerifier, repo *identity.Repo, todoSvc *todo.Service, identitySvc *identity.Service, usageSvc *usage.Service) *gin.Engine {
+// KeysServer (ListKeys/RevokeKey) — nil is an acceptable value for any
+// test that only exercises the login/callback or me endpoints, since
+// KeysServer.Service is never dereferenced unless a keys route is
+// actually hit. usageSvc is the same shape, for UsageServer
+// (story-1/ticket-14).
+func newTestRouter(cfg *platform.Config, signer *Signer, idVerifier identity.JWTVerifier, repo *identity.Repo, identitySvc *identity.Service, usageSvc *usage.Service) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	logger := testLogger()
@@ -256,7 +253,6 @@ func newTestRouter(cfg *platform.Config, signer *Signer, idVerifier identity.JWT
 	bffapi.RegisterHandlers(apiBFF, testBFFServer{
 		MeServer:    MeServer{},
 		KeysServer:  NewKeysServer(identitySvc),
-		TodoServer:  NewTodoServer(todoSvc),
 		UsersServer: NewUsersServer(identitySvc),
 		UsageServer: NewUsageServer(usageSvc),
 	})
@@ -267,17 +263,104 @@ func newTestRouter(cfg *platform.Config, signer *Signer, idVerifier identity.JWT
 // testBFFServer mirrors cmd/server/main.go's own unexported bffServer
 // composite (that type lives in package main and isn't importable from
 // here) — same embedding, same reasoning: no method names collide across
-// MeServer/KeysServer/TodoServer/UsersServer, so plain embedding
+// MeServer/KeysServer/UsersServer/UsageServer, so plain embedding
 // satisfies bffapi.ServerInterface with no hand-written delegation.
 type testBFFServer struct {
 	MeServer
 	*KeysServer
-	*TodoServer
 	*UsersServer
 	*UsageServer
 }
 
 var _ bffapi.ServerInterface = testBFFServer{}
+
+// newBFFRouterForOwner is this package's single-owner setup, shared by
+// every handler test file in this package (users_handler_test.go,
+// keys_handler_test.go, negative_check_test.go, and any other domain
+// handler this surface grows) — a fresh test DB, a freshly seeded owner,
+// a live signed session cookie for that owner (session.go's
+// Signer.NewSessionCookie, called directly — the same session-seeding
+// shortcut milestone-2's own Done-when-9 test established, its
+// view_handler_test.go, removed by milestone-3/task-3 once the SPA
+// replaced what it rendered), and the full /api/bff router (real
+// middleware chain: RejectActorFields, RequireJSONSession,
+// bff-openapi.yaml's request validator, then the composed
+// ServerInterface — newTestRouter, above). Moved here (story-1/ticket-16)
+// from the deleted example domain's own bff handler test file — a
+// domain-agnostic fixture never belonged there, only happened to live
+// there, the same trap docs/GETTING-STARTED.md's "Two modules, briefly,
+// at once" section warns a fork about with bffOwnerID.
+func newBFFRouterForOwner(t *testing.T) (router *gin.Engine, sessionValue string, owner identity.User) {
+	t.Helper()
+	conn := newTestDB(t)
+	repo := identity.NewRepo(conn)
+	identitySvc := identity.NewService(repo, repo, nil, nil)
+
+	owner = seedUser(t, conn, "owner", "owner-sub-"+t.Name(), true)
+
+	idp := newFakeIDP(t, "test-client")
+	cfg := idp.testConfig()
+	signer := NewSigner([]byte(cfg.SessionSecret))
+	router = newTestRouter(cfg, signer, newIDVerifier(t, idp), repo, identitySvc, nil)
+
+	var err error
+	sessionValue, err = signer.NewSessionCookie(owner.ID)
+	require.NoError(t, err)
+
+	return router, sessionValue, owner
+}
+
+// newBFFRouterForOwnerSharedDB is newBFFRouterForOwner's own setup, except
+// it also returns the underlying *sql.DB and *identity.Service — some
+// tests (users_handler_test.go, keys_handler_test.go) need to seed rows
+// directly or build a second router sharing the exact same database.
+// Moved here alongside newBFFRouterForOwner for the same reason (story-1/
+// ticket-16) — this used to also return the deleted example domain's own
+// service, for a Bearer-authenticated second router its own activity-feed
+// test built; nothing left in this package needs that shape, so it's
+// dropped rather than carried forward unused.
+func newBFFRouterForOwnerSharedDB(t *testing.T) (router *gin.Engine, sessionValue string, owner identity.User, conn *sql.DB, identitySvc *identity.Service) {
+	t.Helper()
+	conn = newTestDB(t)
+	repo := identity.NewRepo(conn)
+	identitySvc = identity.NewService(repo, repo, nil, nil)
+
+	owner = seedUser(t, conn, "owner", "owner-sub-"+t.Name(), true)
+
+	idp := newFakeIDP(t, "test-client")
+	cfg := idp.testConfig()
+	signer := NewSigner([]byte(cfg.SessionSecret))
+	router = newTestRouter(cfg, signer, newIDVerifier(t, idp), repo, identitySvc, nil)
+
+	var err error
+	sessionValue, err = signer.NewSessionCookie(owner.ID)
+	require.NoError(t, err)
+
+	return router, sessionValue, owner, conn, identitySvc
+}
+
+// doAgentAPIRequest issues an HTTP request against the /api/v1 surface,
+// presenting rawKey as `Authorization: Bearer <rawKey>` — the agent's own
+// auth mechanism, distinct from doBFFJSONRequest's session cookie (below).
+// Mirrors internal/transport/publicapi's own doJSONRequest. Moved here
+// (story-1/ticket-16) from the deleted example domain's own activity-feed
+// test file — keys_handler_test.go needs it too, and always did; it just
+// happened to live in a domain-specific file.
+func doAgentAPIRequest(t *testing.T, router *gin.Engine, method, path, rawKey string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	var buf bytes.Buffer
+	if body != nil {
+		require.NoError(t, json.NewEncoder(&buf).Encode(body))
+	}
+	req := httptest.NewRequest(method, path, &buf)
+	req.Header.Set("Content-Type", "application/json")
+	if rawKey != "" {
+		req.Header.Set("Authorization", "Bearer "+rawKey)
+	}
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	return rec
+}
 
 // doBFFJSONRequest issues an HTTP request against the /api/bff JSON
 // surface, presenting sessionValue (if non-empty) as this package's own

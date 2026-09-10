@@ -1,8 +1,7 @@
 // story-1/ticket-14: TanStack Query hook tests for the usage read
-// surface — mirrors ~/lib/todos.test.tsx's own fetch-mock pattern
-// exactly (asserts the right URL/query string is called and the right
-// shape comes back), not a re-test of the server's own aggregation logic
-// (covered server-side in internal/domain/usage).
+// surface — a fetch-mock pattern (asserts the right URL/query string is
+// called and the right shape comes back), not a re-test of the server's
+// own aggregation logic (covered server-side in internal/domain/usage).
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";

@@ -4,19 +4,19 @@
 -- the idempotency key: a collector re-POSTing an already-ingested id must
 -- change nothing (INSERT OR IGNORE, internal/domain/usage/repo.go), which
 -- is exactly what a plain TEXT PRIMARY KEY gives us here for free — no
--- separate unique index needed, unlike todo_events' client_request_id
--- (that table's own primary key is a fresh generated id per row; here the
--- caller-supplied dedup key IS the primary key, so ON CONFLICT(id) DO
--- NOTHING is enough).
+-- separate unique index needed the way an event log whose own primary
+-- key is a fresh generated id per row would need one for its dedup key;
+-- here the caller-supplied dedup key IS the primary key, so
+-- ON CONFLICT(id) DO NOTHING is enough.
 --
 -- No FOREIGN KEY to users/api_keys: this domain is reported by a
 -- collector authenticating as one machine-wide API key, not owned by (or
 -- scoped to) the human/agent identity that key belongs to — `actor` below
 -- is a plain string naming which crew-home produced the underlying
 -- session (ticket 9/contract's data model), not a users.id reference.
--- Ownership-scoping (I3) does not apply to this domain for the same
--- reason it stopped applying to `todos` (GOAL.md's Ownership model
--- decision) — see internal/domain/usage/repo_test.go's own TestI3_ test.
+-- Ownership-scoping (I3) does not apply to this domain — there is no
+-- owner at all for a collector-reported event — see
+-- internal/domain/usage/repo_test.go's own TestI3_ test.
 CREATE TABLE usage_events (
     id                           TEXT PRIMARY KEY,
     session_id                   TEXT NOT NULL,

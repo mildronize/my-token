@@ -3,7 +3,7 @@
 // (bff-schema.gen.ts, `npm run generate:api`) — types only, not a full
 // client generator, per GOAL.md's Decisions table ("Typed client, still no
 // tRPC ... openapi-typescript generates types ... a thin fetch wrapper
-// underneath"). Used by every /api/bff/* hook (lib/todos.ts, lib/keys.ts)
+// underneath"). Used by every /api/bff/* hook (lib/keys.ts, lib/usage.ts)
 // except auth-client.ts's own GET /api/bff/me call, which deliberately
 // does NOT go through this wrapper — see that file's own comment on why
 // (I5: a 401 here is parsed for `message`/`code` so the CRUD screens can
@@ -31,7 +31,7 @@ export class BFFRequestError extends Error {
  * Calls one of the BFF's /api/bff/* endpoints with credentials included —
  * the session cookie is HttpOnly (`_contract/API.md`), so fetch only ever
  * sends it, never reads it. `path` is relative to `/api/bff` (e.g.
- * "/todos", not "/api/bff/todos").
+ * "/keys", not "/api/bff/keys").
  */
 export async function bffFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api/bff${path}`, {

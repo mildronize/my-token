@@ -15,7 +15,8 @@ import (
 )
 
 // decodeIngestResponse decodes an api.IngestUsageEventsBatchResponse-shaped
-// body — usage-specific, mirrors todo_handler_test.go's own decodeTodo.
+// body — usage-specific, the same "one decode helper per response shape"
+// convention every handler test file in this package follows.
 func decodeIngestResponse(t *testing.T, rec *httptest.ResponseRecorder) api.IngestUsageEventsBatchResponse {
 	t.Helper()
 	var got api.IngestUsageEventsBatchResponse
@@ -23,8 +24,7 @@ func decodeIngestResponse(t *testing.T, rec *httptest.ResponseRecorder) api.Inge
 	return got
 }
 
-// countUsageEventRows returns usage_events' current row count — used
-// below the same way todo_handler_test.go's countTodoEventRows is: a
+// countUsageEventRows returns usage_events' current row count — a
 // status-code assertion alone can't tell "exactly one row landed" apart
 // from "two rows landed and the response just reported one".
 func countUsageEventRows(t *testing.T, conn *sql.DB) int {

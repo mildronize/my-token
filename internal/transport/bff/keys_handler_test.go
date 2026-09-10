@@ -36,11 +36,10 @@ import (
 
 // newAgentPublicAPIRouterForKeys builds a bare /api/v1 stack mounting only
 // publicapi.KeysServer.ListKeys — the real Bearer-authenticated surface an
-// agent actually calls in production, not a service-layer shortcut. Mirrors
-// activity_handler_test.go's own newAgentPublicAPIRouter (same package,
-// same "mount only the routes this file's tests need directly" pattern,
-// same reasoning: RequireActor + the real openapi.yaml request validator,
-// the same middleware chain production traffic hits).
+// agent actually calls in production, not a service-layer shortcut: mount
+// only the routes this file's tests need directly, RequireActor + the
+// real openapi.yaml request validator, the same middleware chain
+// production traffic hits.
 func newAgentPublicAPIRouterForKeys(t *testing.T, identitySvc *identity.Service) *gin.Engine {
 	t.Helper()
 	validator, err := api.RequestValidator()
@@ -67,7 +66,7 @@ func newAgentPublicAPIRouterForKeys(t *testing.T, identitySvc *identity.Service)
 // this test is confirmed to go red — empty list, not just wrong count —
 // before being reverted.
 func TestBFFHandler_ListKeys_ReturnsEveryAgentsKeys(t *testing.T) {
-	router, ownerSession, _, _, identitySvc, _ := newBFFRouterForOwnerSharedDB(t)
+	router, ownerSession, _, _, identitySvc := newBFFRouterForOwnerSharedDB(t)
 
 	issuedA, err := identitySvc.IssueAPIKeyForHandle(t.Context(), "agent-alpha")
 	require.NoError(t, err)
@@ -103,7 +102,7 @@ func TestBFFHandler_ListKeys_ReturnsEveryAgentsKeys(t *testing.T) {
 // user_id sense — I21's other half — verified by reading the list back
 // afterward rather than only trusting the 204.
 func TestBFFHandler_RevokeKey_AnyAgentsKey_ThenListNoLongerShowsIt(t *testing.T) {
-	router, ownerSession, _, _, identitySvc, _ := newBFFRouterForOwnerSharedDB(t)
+	router, ownerSession, _, _, identitySvc := newBFFRouterForOwnerSharedDB(t)
 
 	issued, err := identitySvc.IssueAPIKeyForHandle(t.Context(), "agent-to-revoke")
 	require.NoError(t, err)
@@ -138,11 +137,9 @@ func TestBFFHandler_RevokeKey_UnknownID_ReturnsNotFound(t *testing.T) {
 
 // TestBFFHandler_ListKeys_Unauthenticated_Returns401 and
 // TestBFFHandler_RevokeKey_Unauthenticated_Returns401 mirror every other
-// /api/bff endpoint's own unauthenticated-401 test (e.g.
-// activity_handler_test.go's TestBFFHandler_ListActivity_Unauthenticated_
-// Returns401) — a valid owner session is still required to reach either
-// handler at all, even though neither is scoped to that session's own
-// user_id anymore.
+// /api/bff endpoint's own unauthenticated-401 test — a valid owner session
+// is still required to reach either handler at all, even though neither
+// is scoped to that session's own user_id anymore.
 func TestBFFHandler_ListKeys_Unauthenticated_Returns401(t *testing.T) {
 	router, _, _ := newBFFRouterForOwner(t)
 
@@ -181,7 +178,7 @@ func TestBFFHandler_RevokeKey_Unauthenticated_Returns401(t *testing.T) {
 // the key still authenticates after the "revoke" call, before the fix is
 // reverted.
 func TestDoneWhen11_RevocationActuallyStopsTheKey_BothHalves(t *testing.T) {
-	bffRouter, ownerSession, _, _, identitySvc, _ := newBFFRouterForOwnerSharedDB(t)
+	bffRouter, ownerSession, _, _, identitySvc := newBFFRouterForOwnerSharedDB(t)
 	agentRouter := newAgentPublicAPIRouterForKeys(t, identitySvc)
 
 	// 1. Issue a real agent key through the exact path cmd/issue-key's own

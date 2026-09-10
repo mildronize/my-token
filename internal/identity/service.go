@@ -263,8 +263,8 @@ func (s *Service) ListAPIKeys(ctx context.Context, ownerID string) ([]APIKey, er
 
 // RevokeAPIKey revokes ownerID's own key by id (API.md
 // `DELETE /api/v1/keys/:id`) — ErrNotFound for both an unknown id and a
-// different owner's id, the same "absence, not permission" shape I3 gives
-// todos, applied here to keys (mirrors todo.Service.DeleteTodo).
+// different owner's id, I3's "absence, not permission" shape, applied
+// here to keys.
 func (s *Service) RevokeAPIKey(ctx context.Context, ownerID, id string) (APIKey, error) {
 	return s.APIKeys.RevokeAPIKey(ctx, id, ownerID)
 }

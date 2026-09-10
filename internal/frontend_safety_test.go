@@ -191,22 +191,24 @@ func TestStripJSComments_URLThenAGenuineTrailingCommentBothHandledCorrectly(t *t
 	assert.Contains(t, got, "const x = 1;")
 }
 
-// meetsI20Floor is this check's own floor rule, the same shape as I15's
-// meetsI15Floor (architecture_test.go) and for the identical reason: a
-// scan that silently finds zero (or nearly zero) files — a moved web/src,
-// a typo'd extension list, a build-layout change — would report "no
-// violations found" and go green while having checked nothing. 10 is
-// comfortably below web/src's actual file count at the time this check
-// was written (30+) but high enough that "the scan is fundamentally
-// broken" and "this is a small, legitimate repo" are distinguishable.
+// meetsI20Floor is this check's own floor rule — the same "assert a
+// minimum count was actually found before asserting anything about what
+// was found" shape this repo's other absence-checks use (dbquery's
+// grant-must-be-exercised check is the same idea, inverted), for the
+// identical reason: a scan that silently finds zero (or nearly zero)
+// files — a moved web/src, a typo'd extension list, a build-layout
+// change — would report "no violations found" and go green while having
+// checked nothing. 10 is comfortably below web/src's actual file count
+// at the time this check was written (30+) but high enough that "the
+// scan is fundamentally broken" and "this is a small, legitimate repo"
+// are distinguishable.
 func meetsI20Floor(count int) bool {
 	return count >= 10
 }
 
 // TestI20Floor_CanActuallyFail proves meetsI20Floor's >= expression
 // really does flip to false below the floor, rather than trusting it was
-// written correctly by inspection — mirrors TestI15Floor_CanActuallyFail
-// exactly, same reasoning.
+// written correctly by inspection.
 func TestI20Floor_CanActuallyFail(t *testing.T) {
 	assert.False(t, meetsI20Floor(0), "zero scanned files must fail the floor, not pass trivially")
 	assert.False(t, meetsI20Floor(1))
@@ -221,9 +223,9 @@ func TestI20Floor_CanActuallyFail(t *testing.T) {
 //
 // Fails loudly, not silently, if web/src is missing entirely (a moved
 // directory, a build-layout change) rather than treating "nothing to
-// scan" as "nothing found, therefore safe" — the exact distinction I15's
-// own floor exists to draw, applied here to a missing directory instead
-// of a missing function set.
+// scan" as "nothing found, therefore safe" — the same distinction
+// meetsI20Floor above exists to draw, applied here to a missing
+// directory instead of a too-small file count.
 func TestI20_FrontendNeverUsesDangerouslySetInnerHTML(t *testing.T) {
 	root := repoRoot(t)
 	webSrcDir := filepath.Join(root, "web", "src")

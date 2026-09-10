@@ -5,23 +5,16 @@
 // consequence of swapping components, not a logic change), and
 // next/navigation's `usePathname` -> react-router's `useLocation().pathname`.
 //
-// NAV_LINKS and the logo text below are the one further edit task-1 left
-// for task-3 (its own report: "flagged in docs/GETTING-STARTED.md's new
-// Step 3b as one of the domain-noun spots ... task-3 still needs to
-// revisit") — a content fix, not a logic change: at task-3 time, my-task's
-// own Activity/Projects routes didn't exist in this template, so the list
-// was trimmed to the one real content route this SPA had.
-//
-// milestone-4/task-7 adds "Activity" back — this template does now have
-// an activity log (ActivityPage.tsx, "/activity"), the one my-task-shaped
-// route task-3's own comment above said didn't apply yet. Still no
-// "Projects" — that domain concept genuinely doesn't exist here
-// (GOAL.md's out-of-scope note, unchanged by this milestone).
+// story-1/ticket-16 deleted the example domain module (and its own
+// nav links along with it) — the usage console (story-1/ticket-14) is
+// this app's only real remaining screen. Still no "Projects" — that
+// domain concept genuinely doesn't exist here (GOAL.md's out-of-scope
+// note).
 import { useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import ThemeToggle from "./ThemeToggle";
 import { useSession, signOut } from "~/lib/auth-client";
-import { Menu, X, ListChecks } from "lucide-react";
+import { Menu, X, Gauge } from "lucide-react";
 import {
   Popover,
   PopoverTrigger,
@@ -29,8 +22,6 @@ import {
 } from "~/components/ui/popover";
 
 const NAV_LINKS: ReadonlyArray<{ href: string; label: string }> = [
-  { href: "/", label: "Todos" },
-  { href: "/activity", label: "Activity" },
   { href: "/usage", label: "Usage" },
 ];
 
@@ -65,7 +56,7 @@ export default function Header() {
           to="/"
           className="inline-flex items-center gap-2 rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink)] no-underline shadow-[0_8px_24px_rgba(26,46,74,0.08)] sm:px-4 sm:py-2"
         >
-          <ListChecks className="size-4" />
+          <Gauge className="size-4" />
           {/* Hide text on mobile, show on md+ */}
           <span className="hidden lg:inline">My Template</span>
         </Link>

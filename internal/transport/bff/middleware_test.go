@@ -2,9 +2,9 @@ package bff
 
 import "testing"
 
-// TestSecureFromURL_FollowsConfiguredScheme is task-10's regression test
-// (.chief/milestone-2/_plan/_todo.md): the cookie Secure attribute must be
-// derived from cfg.AuthAudience's scheme, not hardcoded. This directly
+// TestSecureFromURL_FollowsConfiguredScheme is task-10's regression test:
+// the cookie Secure attribute must be derived from cfg.AuthAudience's
+// scheme, not hardcoded. This directly
 // covers the bug that broke มายด์'s own first login attempt — an
 // http://localhost AuthAudience (GETTING-STARTED.md's documented local-dev
 // setup) must produce Secure=false, since Safari refuses to store a Secure

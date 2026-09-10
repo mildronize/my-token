@@ -9,16 +9,13 @@
 // that's safe to rely on. task-1 built routing against placeholder page
 // content; task-3 wires the real pages underneath the same route table.
 //
-// milestone-4/task-7 adds two more routes under the same AppLayout:
-// "/todos/:id" (TodoDetailPage — GOAL.md's task-7 spec, item 1) and
-// "/activity" (ActivityPage — item 3, mirrors my-task's own "/" home page
-// but at its own path since this template's "/" is already TodosPage).
+// story-1/ticket-16 deleted the example domain module's own routes
+// ("/{id}", "/activity") along with the domain itself, and pointed
+// "/" at UsagePage — the usage console (story-1/ticket-14) is this app's
+// only real remaining screen, so both "/" and "/usage" serve it.
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { Toaster } from "~/components/ui/sonner";
 import AppLayout from "~/app/AppLayout";
-import TodosPage from "~/app/TodosPage";
-import TodoDetailPage from "~/app/todos/TodoDetailPage";
-import ActivityPage from "~/app/activity/ActivityPage";
 import SettingsPage from "~/app/settings/page";
 import UsagePage from "~/app/usage/UsagePage";
 
@@ -31,9 +28,7 @@ export default function App() {
           element={
             <AppLayout>
               <Routes>
-                <Route path="/" element={<TodosPage />} />
-                <Route path="/todos/:id" element={<TodoDetailPage />} />
-                <Route path="/activity" element={<ActivityPage />} />
+                <Route path="/" element={<UsagePage />} />
                 <Route path="/usage" element={<UsagePage />} />
                 <Route path="/settings" element={<SettingsPage />} />
               </Routes>

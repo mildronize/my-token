@@ -1,10 +1,15 @@
-// milestone-4: TanStack Query hook for the BFF's assignee-picker source
-// (GET /api/bff/users, _contract/API.md) — มายด์'s ask: "the assignee
-// form in /todos/:id [should be] a drop[down] of the assignee, not
-// freeform text, see in my-task." List only, owner-session only, every
-// active user of either role, ordered by handle — mirrors my-task's own
-// user.ts router and lib/keys.ts's own minimal shape (one query, no
+// milestone-4: TanStack Query hook for the BFF's user-listing source
+// (GET /api/bff/users, _contract/API.md). List only, owner-session only,
+// every active user of either role, ordered by handle — mirrors my-task's
+// own user.ts router and lib/keys.ts's own minimal shape (one query, no
 // mutations: this surface has no create/update/delete, by design).
+//
+// story-1/ticket-16 deleted this file's only real consumer (the example
+// domain module's assignee picker) along with the domain itself —
+// nothing in this app currently calls useUsersQuery/assigneeOptions, but
+// the endpoint and hook are left in place as a general-purpose
+// user-listing utility rather than deleted, since neither is
+// domain-specific. Flagged for review, not acted on.
 import { useQuery } from "@tanstack/react-query";
 
 import { bffFetch } from "~/lib/api/client";
@@ -46,11 +51,8 @@ export const UNASSIGNED = "__unassigned__";
  * Builds an assignee `<Combobox>`'s option list: "Unassigned" first, then
  * every active user labeled by handle. The option `value` is the user's
  * **id**, not their handle — a deliberate divergence from my-task's own
- * Combobox (which writes a handle, since my-task's own `assigned` event
- * `to` takes one): this template's wire contract writes an id
- * (`Todo.assigneeId`, `CreateTodoEventRequest.to` for `assigned` —
- * `_contract/API.md`), unchanged by this feature, so the picker's value
- * has to match what the write actually expects, not the display text.
+ * Combobox (which writes a handle), so the picker's value matches what a
+ * write would actually expect, not the display text.
  */
 export function assigneeOptions(users: User[]): ComboboxOption[] {
   return [

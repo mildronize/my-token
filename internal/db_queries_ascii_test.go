@@ -1,26 +1,26 @@
 // Package internal — a floor for a real, reproduced sqlc bug:
 // bin/sqlc v1.31.1 (pinned in go.mod) corrupts its own star-expansion
 // byte offsets when a db/queries/*.sql file contains any non-ASCII byte
-// (not just an em dash — task-1's own report and todo_events.sql's own
-// comment named only the em dash it happened to hit; a real fork
-// (DLV-1) hit the identical corruption with "§" and with Thai prose).
-// The failure mode is actively misleading: sqlc reports a syntax error
-// naming a token that appears in no file ("mismatched input 'SELECd'")
-// at a line number that is not where the non-ASCII byte actually is, and
-// the corruption can cascade into unrelated queries later in the same
-// file. A comment warning this away only reaches whoever opens
-// todo_events.sql specifically — this template's own convention
-// (em-dash prose, Thai rulings quoted verbatim) makes every other
-// db/queries/*.sql file an equally likely place to reintroduce it. This
-// check reaches the population the comment can't: anyone editing any
-// file under db/queries/, including a fork that never opens
-// todo_events.sql at all.
+// (not just an em dash — task-1's own report first found this with an em
+// dash, a real fork (DLV-1) later hit the identical corruption with "§"
+// and with Thai prose, and story-1/ticket-16 independently re-hit the
+// same em-dash case by hand while editing a query file's comment, caught
+// immediately by this exact test). The failure mode is actively
+// misleading: sqlc reports a syntax error naming a token that appears in
+// no file ("mismatched input 'SELECd'") at a line number that is not
+// where the non-ASCII byte actually is, and the corruption can cascade
+// into unrelated queries later in the same file. A comment warning this
+// away only reaches whoever happens to open the one file it was written
+// in — this template's own convention (em-dash prose, Thai rulings
+// quoted verbatim) makes every db/queries/*.sql file an equally likely
+// place to reintroduce it. This check reaches the population a comment
+// can't: anyone editing any file under db/queries/, whether or not they
+// ever open the file the bug was first found in.
 //
 // Removal condition, stated so this doesn't outlive its own cause and
-// turn into folklore nobody can justify deleting: remove this check (and
-// widen todo_events.sql's own comment back down, or drop it) once go.mod
-// pins a github.com/sqlc-dev/sqlc release past v1.31.1 that no longer
-// corrupts star-expansion byte offsets on non-ASCII input in
+// turn into folklore nobody can justify deleting: remove this check once
+// go.mod pins a github.com/sqlc-dev/sqlc release past v1.31.1 that no
+// longer corrupts star-expansion byte offsets on non-ASCII input in
 // db/queries/*.sql — verify against that release the same way this file
 // was verified against v1.31.1 (a controlled repro: add non-ASCII above a
 // star-expansion query, confirm sqlc generate no longer mangles it)
@@ -82,8 +82,8 @@ func TestDBQueriesFilesAreASCIIOnly(t *testing.T) {
 					"invented tokens and wrong line numbers rather than a useful error at the actual "+
 					"location. Use plain ASCII in this file (spell out em dashes as \"--\", "+
 					"transliterate or move non-ASCII prose to this test's own comment or to a doc "+
-					"outside db/queries/) — see todo_events.sql's own comment for the original, "+
-					"narrower report of this bug.",
+					"outside db/queries/) — see this file's own package doc comment for the full "+
+					"history of this bug.",
 				path, line, r,
 			)
 			i += size

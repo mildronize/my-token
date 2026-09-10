@@ -31,7 +31,7 @@ func decodeUserList(t *testing.T, body []byte) bffapi.UserList {
 // inactive user is NOT — a check that only asserted one half could pass
 // by accident (e.g. returning every user regardless of active).
 func TestBFFHandler_ListUsers_BothRoles_ExcludesInactive(t *testing.T) {
-	router, ownerSession, owner, conn, identitySvc, _ := newBFFRouterForOwnerSharedDB(t)
+	router, ownerSession, owner, conn, identitySvc := newBFFRouterForOwnerSharedDB(t)
 
 	issued, err := identitySvc.IssueAPIKeyForHandle(context.Background(), "an-agent")
 	require.NoError(t, err)

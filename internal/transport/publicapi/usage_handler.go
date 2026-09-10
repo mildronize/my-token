@@ -11,8 +11,8 @@ import (
 
 // UsageServer adapts usage.Service to internal/api's generated
 // ServerInterface's usage-shaped subset (IngestUsageEventsBatch) —
-// story-1/ticket-11's core ingestion endpoint. Mirrors TodoServer's own
-// shape (todo_handler.go): a thin adapter over the domain Service, no
+// story-1/ticket-11's core ingestion endpoint. Mirrors KeysServer's own
+// shape (keys_handler.go): a thin adapter over the domain Service, no
 // business logic of its own.
 type UsageServer struct {
 	Service *usage.Service
@@ -50,7 +50,7 @@ func toIngestEvent(e api.UsageEventInput) usage.IngestEvent {
 // Bearer-authenticated caller — the collector's own API key, per
 // ticket 11's "reusing my-template's existing auth middleware" decision;
 // there is no further per-caller restriction the way I3's ownership
-// scoping applies to todos, since this domain has none — see
+// scoping applies to some other domains, since this domain has none — see
 // internal/domain/usage/repo_test.go's own TestI3_ test). `install_id`/
 // `hostname` (api.IngestUsageEventsBatchRequest's own top-level fields)
 // are required by the contract's own wire shape (contract's API surface
@@ -73,7 +73,7 @@ func (s *UsageServer) IngestUsageEventsBatch(c *gin.Context) {
 		// one declaring `cost`/`source` (additionalProperties: false on
 		// UsageEventInput) before this middleware chain reaches the
 		// handler at all — this is a defensive fallback, the same
-		// convention todo_handler.go's own CreateTodo/UpdateTodo follow.
+		// convention every other handler in this package follows.
 		c.AbortWithStatus(http.StatusBadRequest)
 		return
 	}

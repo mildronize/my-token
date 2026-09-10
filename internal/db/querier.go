@@ -11,53 +11,13 @@ import (
 
 type Querier interface {
 	CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) (ApiKey, error)
-	CreateTodo(ctx context.Context, arg CreateTodoParams) (Todo, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
 	GetAPIKeyByHash(ctx context.Context, keyHash string) (ApiKey, error)
-	// milestone-4: no owner scoping - any authenticated actor may read any
-	// todo (Ownership model decision, GOAL.md).
-	//
-	// milestone-4 fix-round (handle-exposure): same LEFT JOIN as ListTodos
-	// above, same reasoning.
-	GetTodoByID(ctx context.Context, id string) (GetTodoByIDRow, error)
-	// The idempotency lookup (I19): checked at the top of the write path,
-	// inside the same transaction as the insert it would otherwise perform.
-	// A hit means "return this row unchanged, write nothing."
-	GetTodoEventByClientRequestID(ctx context.Context, clientRequestID string) (TodoEvent, error)
-	// COALESCE to 0 so a todo with no events yet still returns a usable
-	// value (the caller adds 1 unconditionally) instead of NULL/sql.ErrNoRows
-	// forcing a special first-event case.
-	GetTodoEventMaxSeqByTodoID(ctx context.Context, todoID string) (int64, error)
 	// handle is COLLATE NOCASE at the schema level (see migration), so this
 	// comparison is case-insensitive without needing an explicit COLLATE here.
 	GetUserByHandle(ctx context.Context, handle string) (User, error)
 	GetUserByID(ctx context.Context, id string) (User, error)
 	GetUserBySSOSubject(ctx context.Context, ssoSubject sql.NullString) (User, error)
-	// milestone-4 fix-round (handle-exposure): resolves a user id to its
-	// handle - used both to fill in a freshly created todo's assignee handle
-	// (CreateTodo's own RETURNING * has no join to piggyback on) and to bake
-	// a {id, handle} snapshot into the `assigned` event's payload at write
-	// time (internal/domain/todo/service.go's Append), matching my-task's own
-	// mustGetAssignee
-	// (~/gits/my-task/src/server/modules/task/task.service.ts:537-545), which
-	// resolves a handle at the exact same moment for the exact same reason:
-	// an immutable historical snapshot, not a live join, so a later handle
-	// change never rewrites old history. Read-only display lookup, same
-	// ReadOnlyGrant as this file's own joins above (todos.sql / users) - not
-	// a new grant.
-	GetUserHandleByID(ctx context.Context, id string) (GetUserHandleByIDRow, error)
-	// Every query in this file is named with a "TodoEvent" prefix on
-	// purpose, not just for readability: INVARIANTS.md I15 extends
-	// internal/architecture_test.go with a check that only
-	// internal/domain/todo's own repo file references the generated
-	// *TodoEvent*-named query functions - the name is part of the contract
-	// that check matches against, not incidental.
-	// The single write path (I15) computes seq as
-	// GetTodoEventMaxSeqByTodoID's result + 1 in the same transaction as this
-	// insert, and checks GetTodoEventByClientRequestID first (I19). This
-	// query only ever appends, never mutates (I17: append-only, no
-	// exceptions).
-	InsertTodoEvent(ctx context.Context, arg InsertTodoEventParams) (TodoEvent, error)
 	InsertUsageEventIgnoreDuplicate(ctx context.Context, arg InsertUsageEventIgnoreDuplicateParams) (int64, error)
 	ListAPIKeysByOwner(ctx context.Context, userID string) ([]ApiKey, error)
 	// Every active user, either role -- the assignee-picker's own source
@@ -72,8 +32,8 @@ type Querier interface {
 	// existing (GOAL.md's "Owner-facing key visibility" decision). A JOIN on
 	// users from this file is a same-module reference (both api_keys and
 	// users belong to the identity module per internal/dbquery/
-	// tableisolation.go's TableOwnership) so it needs no ReadOnlyGrant, unlike
-	// todo_events.sql's cross-module JOIN on users.
+	// tableisolation.go's TableOwnership) so it needs no ReadOnlyGrant - a
+	// cross-module JOIN on a table owned elsewhere would.
 	//
 	// milestone-4 fix-round (handle-exposure): api_keys.* PLUS users.handle -
 	// my-task's own src/app/(app)/settings/api-key-settings.tsx shows
@@ -86,71 +46,6 @@ type Querier interface {
 	// (ListAllAgentAPIKeysRow) is scoped to this one query only; every other
 	// query in this file keeps returning bare db.ApiKey, unaffected.
 	ListAllAgentAPIKeys(ctx context.Context) ([]ListAllAgentAPIKeysRow, error)
-	// The per-todo timeline (`_contract/API.md`'s milestone-4 section):
-	// oldest-first, unlike the cross-todo feed below.
-	//
-	// milestone-4 fix-round (handle-exposure): joins users for the actor's
-	// handle/role, the same shape ListTodoEventsFeed below already carries -
-	// task-7's own report found this query never had it, leaving the
-	// per-todo timeline structurally unable to tell human from agent
-	// (Done-when 6/9) or show a name at all (see TimelineEventRow.tsx's own
-	// TimelineEventData doc comment, which named this exact gap). Explicit
-	// column list, not SELECT *, for the same star-expansion-safety reason
-	// ListTodoEventsFeed's own comment above gives for its join. No new
-	// ReadOnlyGrant needed - this file already has one for users
-	// (dbquery.ReadOnlyGrants: "todo_events.sql" / "users"), earned by
-	// ListTodoEventsFeed's own join.
-	ListTodoEventsByTodoID(ctx context.Context, todoID string) ([]ListTodoEventsByTodoIDRow, error)
-	// The cross-todo activity feed (`GET /api/bff/activity`,
-	// `_contract/API.md`): every event across every todo, newest first,
-	// joined to todos (title) and users (actor handle/role, so the caller can
-	// mark human vs agent). Cursor-paginated on (created_at, id): the first
-	// page passes both cursor columns as NULL; every later page passes the
-	// previous page's last row's created_at/id.
-	//
-	// Explicit column list (not sqlc.embed) and sqlc.arg(limit) (not a bare
-	// anonymous placeholder) on purpose, not just style: sqlc.embed was
-	// observed to reserve a phantom numbered-placeholder slot ahead of the
-	// first sqlc.narg below, which pushed every later placeholder's number
-	// one higher than the generated Go function's own argument order
-	// accounts for. modernc.org/sqlite binds database/sql's positional args
-	// strictly by call order to the SQL text's own numbered placeholders, not
-	// by re-deriving numbers from how many args were passed - so a query
-	// whose numbering starts one higher than expected silently drops the
-	// first bound arg onto an unused slot and leaves the highest-numbered
-	// placeholder (LIMIT) with nothing bound to it at all ("missing argument
-	// with index N"), rather than erroring at generate time. Keeping every
-	// placeholder inside sqlc's own numbering (no bare anonymous placeholder)
-	// and avoiding sqlc.embed here keeps the numbering contiguous from the
-	// start, matching ListTodoEventsFeedParams field order exactly.
-	// (Also: plain ASCII only in this comment block, never an em dash or any
-	// other non-ASCII byte, immediately above a SELECT line - task-1's own
-	// report found that an em dash there corrupts sqlc v1.31.1's
-	// star-expansion byte offsets; this query hit a variant of the same
-	// corruption during task-2 until this comment's em dashes were replaced.
-	// Wider than em dashes specifically: DLV-1's first real fork hit the
-	// identical corruption with a section-sign character and with Thai prose
-	// in a different db/queries/*.sql file. internal/db_queries_ascii_test.go
-	// is the actual floor now - it fails loudly on any non-ASCII byte
-	// anywhere under db/queries/, not just here, so this paragraph is
-	// historical context for why the rule exists, not the only thing
-	// enforcing it.)
-	ListTodoEventsFeed(ctx context.Context, arg ListTodoEventsFeedParams) ([]ListTodoEventsFeedRow, error)
-	// milestone-4: no owner filter - todos are a shared collection (I3 no
-	// longer applies to this domain). Reads every row.
-	//
-	// milestone-4 fix-round (handle-exposure): LEFT JOIN users for the
-	// assignee's handle - my-task's own task list/detail views show a plain
-	// handle (`t.assignee`, `task.queries.ts`'s `assigneeHandle` LEFT JOIN),
-	// never a bare id, and task-7's report found this repo's own
-	// `Todo.assigneeId` had no equivalent. LEFT JOIN, not JOIN: assignee_id is
-	// nullable (an unassigned todo must still be returned, with a null
-	// handle, not dropped). Explicit column list, not SELECT *, for the same
-	// star-expansion-safety reason ListTodoEventsFeed's own comment
-	// (todo_events.sql) gives for its join. Needs its own ReadOnlyGrant
-	// (dbquery.ReadOnlyGrants: "todos.sql" / "users") - this file owns
-	// "todos", not "users".
-	ListTodos(ctx context.Context) ([]ListTodosRow, error)
 	// story-1/ticket-14: every event whose created_at falls between the two
 	// bound parameters below, range_start inclusive, range_end exclusive.
 	// The raw rows behind the console's own read surface --
@@ -167,11 +62,6 @@ type Querier interface {
 	// so no explicit role filter is needed for this to mean exactly "any
 	// agent's key".
 	RevokeAPIKeyByID(ctx context.Context, arg RevokeAPIKeyByIDParams) (ApiKey, error)
-	UpdateTodoAssignee(ctx context.Context, arg UpdateTodoAssigneeParams) (Todo, error)
-	UpdateTodoDueDate(ctx context.Context, arg UpdateTodoDueDateParams) (Todo, error)
-	UpdateTodoPriority(ctx context.Context, arg UpdateTodoPriorityParams) (Todo, error)
-	UpdateTodoStatus(ctx context.Context, arg UpdateTodoStatusParams) (Todo, error)
-	UpdateTodoTitle(ctx context.Context, arg UpdateTodoTitleParams) (Todo, error)
 }
 
 var _ Querier = (*Queries)(nil)

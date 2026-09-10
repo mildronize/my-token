@@ -6,25 +6,24 @@
 // to) — that holds the single implementation behind every domain module's
 // own I4 ("one seam reads identity" / "one repo, one table") check.
 //
-// Before task-8, internal/todo and internal/identity each had their own
-// near-duplicate copy of this check
+// Before task-8, an early milestone-1 domain module and internal/identity
+// each had their own near-duplicate copy of this check
 // (assertQueriesReferenceOnlyTable/assertQueryFileReferencesOnlyTables),
 // and both hardcoded the *other* module's table name(s) as the forbidden
-// list: internal/identity's hardcoded "todos", internal/todo's hardcoded
-// "users"/"api_keys". Once a fork deletes the todos table and adds its own
-// (e.g. snippets), internal/identity's check keeps forbidding a table that
-// no longer exists and passes vacuously — proven directly: a test agent
+// list. Once a fork deletes that module's table and adds its own (e.g.
+// snippets), internal/identity's check keeps forbidding a table that no
+// longer exists and passes vacuously — proven directly: a test agent
 // added `SELECT * FROM snippets;` to db/queries/users.sql and the "table
-// isolation" check still passed, because it only ever checked for the
-// literal string "todos". This package fixed that first pass by deriving
-// the forbidden-table set dynamically from db/queries/*.sql itself, by
-// scanning every other file's content — but a scan-and-guess derivation
-// cannot tell a legitimate cross-module *read* from an ownership claim,
-// which is exactly the bug milestone-4 found: db/queries/todo_events.sql's
-// ListTodoEventsFeed legitimately JOINs users (for the cross-todo feed's
-// actor handle/role), and the scan attributed "users" to todo_events.sql
-// as if it owned it — which then made users.sql's own, real, "FROM users"
-// look like a violation of someone else's ownership.
+// isolation" check still passed, because it only ever checked for one
+// hardcoded literal table name. This package fixed that first pass by
+// deriving the forbidden-table set dynamically from db/queries/*.sql
+// itself, by scanning every other file's content — but a scan-and-guess
+// derivation cannot tell a legitimate cross-module *read* from an
+// ownership claim, which is exactly the bug milestone-4 found: a query
+// file legitimately JOINed users for a cross-module feed's actor
+// handle/role, and the scan attributed "users" to that file as if it
+// owned it — which then made users.sql's own, real, "FROM users" look
+// like a violation of someone else's ownership.
 //
 // milestone-4's second pass replaces derivation with an explicit,
 // hand-maintained source of truth (TableOwnership, ReadOnlyGrants) —
@@ -60,8 +59,6 @@ import (
 var TableOwnership = map[string]string{
 	"users":        "identity",
 	"api_keys":     "identity",
-	"todos":        "todo",
-	"todo_events":  "todo",
 	"usage_events": "usage",
 }
 
@@ -73,7 +70,7 @@ var TableOwnership = map[string]string{
 // (internal/invariants_test.go) — a human declaring a fact, not a
 // heuristic inferring one.
 type ReadOnlyGrant struct {
-	File  string // e.g. "todo_events.sql"
+	File  string // e.g. "usage_events.sql"
 	Table string // lowercase; must be owned by a module other than File's own
 }
 
@@ -81,22 +78,12 @@ type ReadOnlyGrant struct {
 // be exercised — see AssertEveryReadOnlyGrantIsExercised — an unused
 // grant is a permanent, unexplained exemption and fails loudly rather
 // than accreting silently; an exemption nobody needs is an exemption
-// nobody notices.
-var ReadOnlyGrants = []ReadOnlyGrant{
-	// todo_events.sql's ListTodoEventsFeed and ListTodoEventsByTodoID both
-	// join users for the actor's handle/role (so callers can tell human
-	// from agent) — a display read, never a write; todo_events.sql has no
-	// query that ever writes to users.
-	{File: "todo_events.sql", Table: "users"},
-	// todos.sql's ListTodos/GetTodoByID LEFT JOIN users for the assignee's
-	// handle, and GetUserHandleByID reads a single user's handle by id
-	// (used both by CreateTodo's post-insert handle fill-in and by
-	// service.go's Append to bake a {id, handle} snapshot into the
-	// `assigned` event's payload) — milestone-4 fix-round
-	// (handle-exposure), same "display read, never a write" shape as the
-	// grant above.
-	{File: "todos.sql", Table: "users"},
-}
+// nobody notices. Empty as of story-1/ticket-16: the two entries this
+// list used to carry (the deleted example domain's own cross-module
+// reads of users, for actor handle/role display) went with it. Add an
+// entry here the moment a query file legitimately needs to read — never
+// write — a table it doesn't own.
+var ReadOnlyGrants = []ReadOnlyGrant{}
 
 func grantedReadOnly(file, table string) bool {
 	for _, g := range ReadOnlyGrants {
@@ -214,7 +201,7 @@ type testingT interface {
 
 // AssertQueryFileReferencesOnlyOwnTable is I4's shared check, the single
 // implementation behind every domain module's own dedicated
-// TestI4_..._OnlyQueries...Table(s) test (internal/domain/todo/
+// TestI4_..._OnlyQueries...Table(s) test (internal/domain/usage/
 // repo_test.go, internal/identity/repo_test.go, and any domain module a
 // fork adds alongside or instead of them). It asserts, about the .sql
 // file at filepath.Join(queriesDir, filename):
@@ -280,9 +267,8 @@ func AssertQueryFileReferencesOnlyOwnTable(t testingT, queriesDir, filename, own
 // AssertEveryReadOnlyGrantIsExercised asserts every entry in
 // ReadOnlyGrants actually corresponds to a real reference in the named
 // file — an unused grant is a permanent, unexplained exemption, and this
-// is the floor-assertion that catches it (the same shape as I15's own
-// floor, inverted: there, zero matches meant nothing was checked; here,
-// zero uses means something is permanently permitted for no reason).
+// is the floor-assertion that catches it: zero uses means something is
+// permanently permitted for no reason.
 func AssertEveryReadOnlyGrantIsExercised(t testingT, queriesDir string) {
 	t.Helper()
 

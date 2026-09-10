@@ -11,9 +11,8 @@ import (
 )
 
 // notFoundBody is the one 404 response body RevokeKey ever writes for an
-// unknown or not-this-caller's key id — same "not_found, never forbidden"
-// shape I3 gives todos (todo_handler.go's notFoundError), applied here to
-// keys.
+// unknown or not-this-caller's key id — I3's "not_found, never forbidden"
+// shape, applied here to keys.
 var notFoundBody = NewErrorEnvelope("not_found", "no such key", "")
 
 // KeysServer adapts identity.Service to internal/api's generated
@@ -40,7 +39,7 @@ func toAPIKey(k identity.APIKey) api.ApiKey {
 	}
 }
 
-// keysActorID mirrors todo_handler.go's actorID: reads the actor
+// keysActorID mirrors middleware.go's actorID: reads the actor
 // RequireActor already resolved onto the gin context — this handler never
 // queries users/api_keys itself (I4). The !ok branch is defensive,
 // unreachable given the intended middleware order.
@@ -78,8 +77,8 @@ func (s *KeysServer) ListKeys(c *gin.Context) {
 }
 
 // RevokeKey implements api.ServerInterface — DELETE /api/v1/keys/{id}.
-// Owner-scoped, same 404 rule as todos (I3): another owner's key id, or
-// an id that never existed, both return not_found — never forbidden.
+// Owner-scoped (I3): another owner's key id, or an id that never existed,
+// both return not_found — never forbidden.
 func (s *KeysServer) RevokeKey(c *gin.Context, id string) {
 	ownerID, ok := keysActorID(c)
 	if !ok {

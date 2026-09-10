@@ -45,7 +45,7 @@ func seedUsageEvent(t *testing.T, conn *sql.DB, id, actor, path, machine string,
 // newBFFRouterForUsage builds one /api/bff router with a real
 // usage.Service/usage.Repo on top of a fresh test DB, plus a signed
 // session cookie for a freshly seeded owner — the usage-domain analogue
-// of todo_handler_test.go's own newBFFRouterForOwner. conn is returned so
+// of bff_testutil_test.go's own newBFFRouterForOwner. conn is returned so
 // tests can seed usage_events rows directly (seedUsageEvent, above)
 // before issuing a request.
 func newBFFRouterForUsage(t *testing.T) (router *gin.Engine, sessionValue string, conn *sql.DB) {
@@ -60,7 +60,7 @@ func newBFFRouterForUsage(t *testing.T) (router *gin.Engine, sessionValue string
 	idp := newFakeIDP(t, "test-client")
 	cfg := idp.testConfig()
 	signer := NewSigner([]byte(cfg.SessionSecret))
-	router = newTestRouter(cfg, signer, newIDVerifier(t, idp), repo, nil, identitySvc, usageSvc)
+	router = newTestRouter(cfg, signer, newIDVerifier(t, idp), repo, identitySvc, usageSvc)
 
 	var err error
 	sessionValue, err = signer.NewSessionCookie(owner.ID)

@@ -64,12 +64,12 @@ func checkFails(fn func(t testingT)) bool {
 func TestReferencedTablesStrict_IgnoresProseInLineComments(t *testing.T) {
 	content := `-- and avoiding sqlc.embed here keeps the numbering contiguous from the
 -- previous migration, updating the reader's mental model as they go.
-SELECT * FROM todo_events WHERE todo_id = ?;`
+SELECT * FROM widget_events WHERE widget_id = ?;`
 
 	got, err := referencedTablesStrict(content)
 
 	require.NoError(t, err)
-	assert.Contains(t, got, "todo_events", "the real FROM clause outside any comment must still be found")
+	assert.Contains(t, got, "widget_events", "the real FROM clause outside any comment must still be found")
 	assert.NotContains(t, got, "the", `a comment's "from the"/"into the"/"updating the" must not be read as a table reference`)
 	assert.Len(t, got, 1, "only the one real table reference should have been extracted: %v", got)
 }
@@ -77,12 +77,12 @@ SELECT * FROM todo_events WHERE todo_id = ?;`
 func TestReferencedTablesStrict_CommentedOutQueryIsNotATableReference(t *testing.T) {
 	content := `-- old approach, no longer used:
 -- SELECT * FROM legacy_table WHERE id = ?;
-SELECT * FROM todos WHERE id = ?;`
+SELECT * FROM widgets WHERE id = ?;`
 
 	got, err := referencedTablesStrict(content)
 
 	require.NoError(t, err)
-	assert.Contains(t, got, "todos")
+	assert.Contains(t, got, "widgets")
 	assert.NotContains(t, got, "legacy_table", "a commented-out query must not count as a live reference")
 }
 
@@ -124,20 +124,20 @@ func TestReferencedTablesStrict_CommentBetweenKeywordAndTableIsHandledByCommentS
 	// the strict-parse refusal needs to additionally handle. Verified
 	// here rather than assumed, so a future change to strip order
 	// doesn't silently reopen this.
-	content := "SELECT * FROM todos t\nJOIN -- why we do this\n    users u ON t.created_by = u.id;"
+	content := "SELECT * FROM widgets t\nJOIN -- why we do this\n    users u ON t.created_by = u.id;"
 	got, err := referencedTablesStrict(content)
 	require.NoError(t, err)
-	assert.ElementsMatch(t, []string{"todos", "users"}, got)
+	assert.ElementsMatch(t, []string{"widgets", "users"}, got)
 }
 
 func TestReferencedTablesStrict_PlainNewlineBetweenKeywordAndTableStillWorks(t *testing.T) {
 	// Control: a bare newline (no comment text in between) is ordinary
 	// whitespace and must still resolve normally — this isn't "reject
 	// anything unusual", only "reject what isn't a plain identifier".
-	content := "SELECT * FROM todos t\nJOIN\n    users u ON t.created_by = u.id;"
+	content := "SELECT * FROM widgets t\nJOIN\n    users u ON t.created_by = u.id;"
 	got, err := referencedTablesStrict(content)
 	require.NoError(t, err)
-	assert.ElementsMatch(t, []string{"todos", "users"}, got)
+	assert.ElementsMatch(t, []string{"widgets", "users"}, got)
 }
 
 // --- the redesigned mechanism itself: explicit ownership + narrow,
@@ -157,64 +157,85 @@ SELECT * FROM users JOIN api_keys ON api_keys.user_id = users.id;
 	AssertQueryFileReferencesOnlyOwnTable(t, dir, "users.sql", "users")
 }
 
+// withTemporaryReadOnlyGrant appends grant to the real, package-level
+// ReadOnlyGrants for the duration of one test, restoring it afterward
+// (t.Cleanup) — lets the grant-dependent tests below exercise a real
+// grant without depending on any actual query file needing one today
+// (this list is empty in production as of story-1/ticket-16, since the
+// domain that used to need cross-module reads was deleted whole).
+// Mutates package state, so it's only safe under this package's existing
+// convention of never calling t.Parallel (true repo-wide as of this
+// writing) — a parallel test reading ReadOnlyGrants while this mutation
+// is live would see it. Do not add t.Parallel to this package without
+// also giving this helper (or ReadOnlyGrants itself) a lock.
+func withTemporaryReadOnlyGrant(t *testing.T, grant ReadOnlyGrant) {
+	t.Helper()
+	original := ReadOnlyGrants
+	ReadOnlyGrants = append(append([]ReadOnlyGrant{}, original...), grant)
+	t.Cleanup(func() { ReadOnlyGrants = original })
+}
+
 func TestAssertQueryFileReferencesOnlyOwnTable_GrantedReadOnlyReferencePasses(t *testing.T) {
+	withTemporaryReadOnlyGrant(t, ReadOnlyGrant{File: "usage_events.sql", Table: "users"})
 	dir := t.TempDir()
-	writeQueryFile(t, dir, "todo_events.sql", `
+	writeQueryFile(t, dir, "usage_events.sql", `
 -- name: InsertEvent :one
-INSERT INTO todo_events (id) VALUES (?);
+INSERT INTO usage_events (id) VALUES (?);
 
 -- name: Feed :many
-SELECT * FROM todo_events JOIN users ON users.id = todo_events.actor_id;
+SELECT * FROM usage_events JOIN users ON users.id = usage_events.actor;
 `)
-	// users is owned by a different module (identity), but todo_events.sql
-	// has a real ReadOnlyGrant for it, and this content only reads it.
-	AssertQueryFileReferencesOnlyOwnTable(t, dir, "todo_events.sql", "todo_events")
+	// users is owned by a different module (identity), but this test's
+	// temporary grant covers usage_events.sql reading it, and this content
+	// only reads it.
+	AssertQueryFileReferencesOnlyOwnTable(t, dir, "usage_events.sql", "usage_events")
 }
 
 func TestAssertQueryFileReferencesOnlyOwnTable_UngrantedCrossModuleReferenceFails(t *testing.T) {
 	dir := t.TempDir()
-	writeQueryFile(t, dir, "todos.sql", `
+	writeQueryFile(t, dir, "usage_events.sql", `
 -- name: SneakyRead :one
-SELECT * FROM todos JOIN api_keys ON api_keys.user_id = todos.created_by;
+SELECT * FROM usage_events JOIN api_keys ON api_keys.user_id = usage_events.actor;
 `)
-	// api_keys belongs to identity, not todo, and there is no grant for
-	// todos.sql to read it — this must still be caught.
+	// api_keys belongs to identity, not usage, and there is no grant for
+	// usage_events.sql to read it — this must still be caught.
 	failed := checkFails(func(t testingT) {
-		AssertQueryFileReferencesOnlyOwnTable(t, dir, "todos.sql", "todos")
+		AssertQueryFileReferencesOnlyOwnTable(t, dir, "usage_events.sql", "usage_events")
 	})
-	assert.True(t, failed, "todos.sql reading api_keys (identity's table) with no grant must fail I4")
+	assert.True(t, failed, "usage_events.sql reading api_keys (identity's table) with no grant must fail I4")
 }
 
 func TestAssertQueryFileReferencesOnlyOwnTable_GrantIsReadOnlyByMechanismNotJustIntent(t *testing.T) {
+	withTemporaryReadOnlyGrant(t, ReadOnlyGrant{File: "usage_events.sql", Table: "users"})
 	dir := t.TempDir()
-	writeQueryFile(t, dir, "todo_events.sql", `
+	writeQueryFile(t, dir, "usage_events.sql", `
 -- name: InsertEvent :one
-INSERT INTO todo_events (id) VALUES (?);
+INSERT INTO usage_events (id) VALUES (?);
 
 -- name: MaliciousWrite :one
 UPDATE users SET role = 'owner' WHERE id = ?;
 `)
-	// todo_events.sql has a real ReadOnlyGrant for users — but this
-	// content WRITES to users via UPDATE. The grant must not cover that:
-	// Clara's required attack, stated exactly — "todo_events.sql doing
-	// UPDATE users fails even though users is on its allowlist".
+	// usage_events.sql has this test's own temporary grant for users — but
+	// this content WRITES to users via UPDATE. The grant must not cover
+	// that: Clara's required attack, stated exactly — "the granted file
+	// doing UPDATE users fails even though users is on its allowlist".
 	failed := checkFails(func(t testingT) {
-		AssertQueryFileReferencesOnlyOwnTable(t, dir, "todo_events.sql", "todo_events")
+		AssertQueryFileReferencesOnlyOwnTable(t, dir, "usage_events.sql", "usage_events")
 	})
 	assert.True(t, failed, "a ReadOnlyGrant must not permit a write to the granted table")
 }
 
 func TestAssertQueryFileReferencesOnlyOwnTable_UnknownTableHasNoOwnerFailsLoudly(t *testing.T) {
 	dir := t.TempDir()
-	writeQueryFile(t, dir, "todos.sql", `
--- name: ReadTodos :many
-SELECT * FROM todos;
+	writeQueryFile(t, dir, "usage_events.sql", `
+-- name: ReadUsageEvents :many
+SELECT * FROM usage_events;
 
 -- name: ReadUnknownTable :many
 SELECT * FROM snippets;
 `)
 	failed := checkFails(func(t testingT) {
-		AssertQueryFileReferencesOnlyOwnTable(t, dir, "todos.sql", "todos")
+		AssertQueryFileReferencesOnlyOwnTable(t, dir, "usage_events.sql", "usage_events")
 	})
 	assert.True(t, failed, "a table with no entry in TableOwnership must fail loudly, not pass silently")
 }
@@ -223,13 +244,14 @@ SELECT * FROM snippets;
 // not a no-op ---
 
 func TestAssertEveryReadOnlyGrantIsExercised_CatchesAnUnusedGrant(t *testing.T) {
+	withTemporaryReadOnlyGrant(t, ReadOnlyGrant{File: "usage_events.sql", Table: "users"})
 	dir := t.TempDir()
-	// ReadOnlyGrants (package-level, real) names todo_events.sql/users —
-	// this synthetic todo_events.sql never references users at all, so
-	// the real grant is unused against this directory.
-	writeQueryFile(t, dir, "todo_events.sql", `
+	// This test's own temporary grant names usage_events.sql/users — this
+	// synthetic usage_events.sql never references users at all, so the
+	// grant is unused against this directory.
+	writeQueryFile(t, dir, "usage_events.sql", `
 -- name: InsertEvent :one
-INSERT INTO todo_events (id) VALUES (?);
+INSERT INTO usage_events (id) VALUES (?);
 `)
 	failed := checkFails(func(t testingT) {
 		AssertEveryReadOnlyGrantIsExercised(t, dir)
