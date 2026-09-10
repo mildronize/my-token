@@ -1,0 +1,418 @@
+/*
+ * story-1/ticket-14: the usage console page's own styling, ported
+ * verbatim (class names, colors, spacing) from the approved mockup
+ * (https://claude.ai/code/artifact/c1382132-8662-490a-9e7a-8d7d8f20ea6d,
+ * ticket 3's amber/gold-on-dark decision) — everything here is scoped
+ * under `.usage-console` so it never leaks into the rest of the SPA's
+ * own blue "lagoon" theme (globals.css). The mockup styled a standalone
+ * page (`body`, unscoped `.topbar`/`.tile`/etc.); every such selector
+ * below is rewritten as `.usage-console <selector>` so it only ever
+ * applies inside UsagePage.tsx's own root element.
+ *
+ * Follows the app's existing light/dark toggle (globals.css's
+ * `:root[data-theme]` / `prefers-color-scheme` convention) rather than
+ * inventing a second one — the console's own dark palette activates
+ * under the exact same conditions the rest of the SPA's dark mode does.
+ */
+
+.usage-console {
+  --uc-bg: #f6f3ec;
+  --uc-surface: #ffffff;
+  --uc-surface-raised: #fbf8f0;
+  --uc-border: #e3dcc9;
+  --uc-text: #241d12;
+  --uc-text-dim: #7c7261;
+  --uc-text-faint: #a89c87;
+  --uc-accent: #b8790a;
+  --uc-accent-strong: #8f5c06;
+  --uc-accent-fill: #f0dead;
+  --uc-accent-fill-dim: #f5e9ca;
+  --uc-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --uc-sans: "IBM Plex Sans", -apple-system, sans-serif;
+  --uc-display: "Sora", var(--uc-sans);
+
+  background: var(--uc-bg);
+  color: var(--uc-text);
+  font-family: var(--uc-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  padding: 28px clamp(16px, 4vw, 48px) 56px;
+  border-radius: 12px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .usage-console {
+    --uc-bg: #14110d;
+    --uc-surface: #1e1912;
+    --uc-surface-raised: #262019;
+    --uc-border: #3a3024;
+    --uc-text: #ede6d8;
+    --uc-text-dim: #a89c87;
+    --uc-text-faint: #6f6555;
+    --uc-accent: #f0a202;
+    --uc-accent-strong: #ffc857;
+    --uc-accent-fill: #7a5a12;
+    --uc-accent-fill-dim: #3a2c0f;
+  }
+}
+
+:root[data-theme="dark"] .usage-console {
+  --uc-bg: #14110d;
+  --uc-surface: #1e1912;
+  --uc-surface-raised: #262019;
+  --uc-border: #3a3024;
+  --uc-text: #ede6d8;
+  --uc-text-dim: #a89c87;
+  --uc-text-faint: #6f6555;
+  --uc-accent: #f0a202;
+  --uc-accent-strong: #ffc857;
+  --uc-accent-fill: #7a5a12;
+  --uc-accent-fill-dim: #3a2c0f;
+}
+
+.usage-console * {
+  box-sizing: border-box;
+}
+
+.usage-console h1,
+.usage-console h2,
+.usage-console h3 {
+  font-family: var(--uc-display);
+  text-wrap: balance;
+  margin: 0;
+}
+
+.usage-console .mono {
+  font-family: var(--uc-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- top bar ---------- */
+.usage-console .topbar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--uc-border);
+  margin-bottom: 24px;
+}
+
+.usage-console .topbar .id {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.usage-console .topbar .id h1 {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.usage-console .topbar .id .tag {
+  font-family: var(--uc-mono);
+  font-size: 11px;
+  color: var(--uc-text-faint);
+  border: 1px solid var(--uc-border);
+  border-radius: 3px;
+  padding: 2px 6px;
+  letter-spacing: 0.02em;
+}
+
+.usage-console .topbar .meta {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.usage-console .pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--uc-mono);
+  font-size: 12px;
+  padding: 5px 10px 5px 8px;
+  border-radius: 100px;
+  border: 1px solid var(--uc-border);
+  color: var(--uc-text-dim);
+  white-space: nowrap;
+}
+
+.usage-console .pill .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--uc-accent);
+  box-shadow: 0 0 0 3px var(--uc-accent-fill-dim);
+}
+
+.usage-console .pill strong {
+  color: var(--uc-text);
+  font-weight: 600;
+}
+
+.usage-console .windowtabs {
+  display: flex;
+  border: 1px solid var(--uc-border);
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+.usage-console .windowtabs button {
+  font-family: var(--uc-mono);
+  font-size: 12px;
+  background: none;
+  border: none;
+  color: var(--uc-text-dim);
+  padding: 6px 12px;
+  cursor: pointer;
+  border-right: 1px solid var(--uc-border);
+}
+.usage-console .windowtabs button:last-child {
+  border-right: none;
+}
+.usage-console .windowtabs button[aria-current="true"] {
+  background: var(--uc-accent-fill-dim);
+  color: var(--uc-accent-strong);
+  font-weight: 600;
+}
+.usage-console .windowtabs button:focus-visible {
+  outline: 2px solid var(--uc-accent);
+  outline-offset: -2px;
+}
+
+/* ---------- tiles ---------- */
+.usage-console .tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1px;
+  background: var(--uc-border);
+  border: 1px solid var(--uc-border);
+  border-radius: 10px;
+  overflow: hidden;
+  margin-bottom: 28px;
+}
+
+.usage-console .tile {
+  background: var(--uc-surface);
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.usage-console .tile .label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--uc-text-faint);
+  font-weight: 600;
+}
+
+.usage-console .tile .value {
+  font-family: var(--uc-mono);
+  font-size: 28px;
+  font-weight: 500;
+  color: var(--uc-text);
+  letter-spacing: -0.01em;
+}
+
+.usage-console .tile .value.accent {
+  color: var(--uc-accent);
+}
+
+.usage-console .tile .sub {
+  font-size: 12px;
+  color: var(--uc-text-dim);
+}
+
+/* ---------- section headings ---------- */
+.usage-console section {
+  margin-bottom: 30px;
+}
+
+.usage-console .section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  gap: 12px;
+}
+
+.usage-console .section-head h2 {
+  font-size: 14px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--uc-text-dim);
+}
+
+.usage-console .section-head .note {
+  font-size: 12px;
+  color: var(--uc-text-faint);
+  font-style: italic;
+}
+
+/* ---------- windows table ---------- */
+.usage-console .table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--uc-border);
+  border-radius: 10px;
+  background: var(--uc-surface);
+}
+
+.usage-console table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 480px;
+}
+
+.usage-console th,
+.usage-console td {
+  text-align: left;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--uc-border);
+  white-space: nowrap;
+}
+
+.usage-console thead th {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--uc-text-faint);
+  font-weight: 600;
+  background: var(--uc-surface-raised);
+}
+
+.usage-console tbody tr:last-child td {
+  border-bottom: none;
+}
+.usage-console tbody tr:hover td {
+  background: var(--uc-surface-raised);
+}
+
+.usage-console td.num,
+.usage-console th.num {
+  font-family: var(--uc-mono);
+  text-align: right;
+}
+.usage-console td.window {
+  font-weight: 600;
+}
+.usage-console td.cost {
+  color: var(--uc-accent-strong);
+  font-weight: 600;
+}
+
+/* ---------- breakdown grid ---------- */
+.usage-console .breakdowns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.usage-console .panel {
+  background: var(--uc-surface);
+  border: 1px solid var(--uc-border);
+  border-radius: 10px;
+  padding: 16px 18px 6px;
+}
+
+.usage-console .panel h3 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--uc-text-dim);
+  margin-bottom: 12px;
+}
+
+.usage-console .rank-row {
+  display: grid;
+  grid-template-columns: 20px 1fr auto;
+  align-items: baseline;
+  gap: 10px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--uc-border);
+}
+.usage-console .rank-row:last-child {
+  border-bottom: none;
+}
+
+.usage-console .rank-row .n {
+  font-family: var(--uc-mono);
+  font-size: 11px;
+  color: var(--uc-text-faint);
+}
+
+.usage-console .rank-row .who {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.usage-console .rank-row .who .name {
+  font-family: var(--uc-mono);
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-console .rank-row .who .bar {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--uc-accent-fill-dim);
+  overflow: hidden;
+}
+.usage-console .rank-row .who .bar > span {
+  display: block;
+  height: 100%;
+  background: var(--uc-accent);
+  border-radius: 2px;
+}
+
+.usage-console .rank-row .figs {
+  text-align: right;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.usage-console .rank-row .figs .cost {
+  font-family: var(--uc-mono);
+  font-weight: 600;
+  color: var(--uc-accent-strong);
+  font-size: 13px;
+}
+.usage-console .rank-row .figs .tokens {
+  font-family: var(--uc-mono);
+  font-size: 11px;
+  color: var(--uc-text-faint);
+}
+
+.usage-console .rank-row.unknown .who .name {
+  color: var(--uc-text-faint);
+  font-style: italic;
+}
+
+.usage-console footer {
+  margin-top: 34px;
+  padding-top: 16px;
+  border-top: 1px solid var(--uc-border);
+  font-size: 12px;
+  color: var(--uc-text-faint);
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.usage-console .empty-note {
+  color: var(--uc-text-faint);
+  font-style: italic;
+  padding: 12px 0;
+}

@@ -128,7 +128,7 @@ func buildHandler(ctx context.Context, cfg *platform.Config, db *sql.DB, logger 
 	// *identity.Service instance, not two independently-constructed ones,
 	// the same shared-service-layer reasoning todoSvc's own single
 	// instance already follows across both engines.
-	if err := wireBFF(ctx, bffRouter, cfg, repo, todoSvc, identitySvc, logger, distFS); err != nil {
+	if err := wireBFF(ctx, bffRouter, cfg, repo, todoSvc, usageSvc, identitySvc, logger, distFS); err != nil {
 		return nil, fmt.Errorf("wiring bff: %w", err)
 	}
 
@@ -215,12 +215,12 @@ var _ api.ServerInterface = apiServer{}
 // apiV1 in one call. The validator is mounted after RejectActorFields/
 // RequireActor (see wireIdentity) so a request is authenticated before
 // its payload shape is validated, not the other way around. todoSvc/
-// usageSvc are each built once by buildHandler; todoSvc is additionally
-// shared with wireBFF's own GET / handler (ARCHITECTURE.md's
-// shared-service-layer rule — one todo.Service instance, not two).
-// usageSvc has no bff-surface counterpart (out of this story's scope —
-// ticket 14 owns the console read side, over its own /api/bff endpoints,
-// not this ingestion service directly).
+// usageSvc are each built once by buildHandler and shared with wireBFF
+// too (ARCHITECTURE.md's shared-service-layer rule — one instance of
+// each service, not two): todoSvc backs wireBFF's own TodoServer,
+// usageSvc backs wireBFF's UsageServer (story-1/ticket-14's console read
+// side, GET /api/bff/usage/*) — this ingestion-only usage.Service
+// instance is the exact same one ticket 14's read handlers query.
 func wirePublicAPI(apiV1 *gin.RouterGroup, todoSvc *todo.Service, usageSvc *usage.Service, identitySvc *identity.Service) error {
 	validator, err := api.RequestValidator()
 	if err != nil {
@@ -250,6 +250,7 @@ type bffServer struct {
 	*bff.KeysServer
 	*bff.TodoServer
 	*bff.UsersServer
+	*bff.UsageServer
 }
 
 var _ bffapi.ServerInterface = bffServer{}
@@ -288,7 +289,7 @@ var _ bffapi.ServerInterface = bffServer{}
 // distFS is the SPA's already-fs.Sub'd dist filesystem — see buildHandler's
 // own doc comment on why this is a parameter rather than wireBFF reaching
 // into web.DistFS itself.
-func wireBFF(ctx context.Context, router *gin.Engine, cfg *platform.Config, repo *identity.Repo, todoSvc *todo.Service, identitySvc *identity.Service, logger *slog.Logger, distFS fs.FS) error {
+func wireBFF(ctx context.Context, router *gin.Engine, cfg *platform.Config, repo *identity.Repo, todoSvc *todo.Service, usageSvc *usage.Service, identitySvc *identity.Service, logger *slog.Logger, distFS fs.FS) error {
 	secret := []byte(cfg.SessionSecret)
 	if len(secret) == 0 {
 		secret = make([]byte, 32)
@@ -363,6 +364,7 @@ func wireBFF(ctx context.Context, router *gin.Engine, cfg *platform.Config, repo
 		KeysServer:  bff.NewKeysServer(identitySvc),
 		TodoServer:  bff.NewTodoServer(todoSvc),
 		UsersServer: bff.NewUsersServer(identitySvc),
+		UsageServer: bff.NewUsageServer(usageSvc),
 	})
 
 	spaHandler, err := newSPAHandler(distFS)

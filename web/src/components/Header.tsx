@@ -31,6 +31,7 @@ import {
 const NAV_LINKS: ReadonlyArray<{ href: string; label: string }> = [
   { href: "/", label: "Todos" },
   { href: "/activity", label: "Activity" },
+  { href: "/usage", label: "Usage" },
 ];
 
 /** Return up to two uppercase initials from a display name. */

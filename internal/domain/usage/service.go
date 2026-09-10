@@ -92,3 +92,57 @@ func (s *Service) IngestBatch(ctx context.Context, events []IngestEvent) (receiv
 	}
 	return received, int(insertedRows), nil
 }
+
+// Summary backs GET /api/bff/usage/summary (story-1/ticket-14): resolves
+// window's own [start, now) range (WindowBounds, summary.go), fetches
+// every event in it, and aggregates by groupBy (Aggregate, summary.go —
+// the pure, unit-tested half of this method; this function's only job is
+// wiring now/window into a database call). now is a parameter, not
+// time.Now() called internally, so WindowBounds' calendar-anchoring is
+// exercised deterministically by tests calling this method directly,
+// without needing to fake a clock.
+func (s *Service) Summary(ctx context.Context, window Window, groupBy GroupBy, now time.Time) (SummaryResult, error) {
+	start, end, err := WindowBounds(window, now)
+	if err != nil {
+		return SummaryResult{}, err
+	}
+
+	events, err := s.Repo.ListEventsInWindow(ctx, start, end)
+	if err != nil {
+		return SummaryResult{}, err
+	}
+
+	return Aggregate(events, groupBy), nil
+}
+
+// WindowTotals is one row of GET /api/bff/usage/windows' fixed table —
+// Window names which of the five fixed ranges this row covers, Totals is
+// that range's turns/tokens/cost (no group_by on this endpoint at all,
+// contract's API surface section).
+type WindowTotals struct {
+	Window Window
+	Totals Totals
+}
+
+// Windows backs GET /api/bff/usage/windows: one row per entry in the
+// package-level Windows slice (summary.go), in that fixed order, each
+// computed the same way Summary computes a single window's totals — this
+// just loops over all five instead of taking one from the caller.
+func (s *Service) Windows(ctx context.Context, now time.Time) ([]WindowTotals, error) {
+	rows := make([]WindowTotals, 0, len(Windows))
+	for _, w := range Windows {
+		start, end, err := WindowBounds(w, now)
+		if err != nil {
+			return nil, err
+		}
+		events, err := s.Repo.ListEventsInWindow(ctx, start, end)
+		if err != nil {
+			return nil, err
+		}
+		// GroupBy is irrelevant here — only .Totals is read — but
+		// Aggregate needs a value to switch on; GroupByActor is as good
+		// as any other since Breakdown is discarded.
+		rows = append(rows, WindowTotals{Window: w, Totals: Aggregate(events, GroupByActor).Totals})
+	}
+	return rows, nil
+}

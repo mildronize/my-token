@@ -124,6 +124,64 @@ func TestI3_UsageEventsScopingDoesNotApplyToThisDomain(t *testing.T) {
 // test to exist inside every domain module's own package
 // (perDomainModuleScopePackages, updated for this module in
 // internal/invariants_test.go).
+// TestRepo_ListEventsInWindow_HalfOpenRange proves the repo layer's own
+// SQL filter is genuinely half-open ([start, end), start inclusive, end
+// exclusive) against a real database — summary_test.go/service_test.go
+// already cover the window-boundary math and the aggregation logic as
+// pure functions with a fake repo; this is the one place the real SQL
+// comparison operators (`>=`/`<`) are exercised.
+func TestRepo_ListEventsInWindow_HalfOpenRange(t *testing.T) {
+	ctx := context.Background()
+	conn := newTestDB(t)
+	repo := NewRepo(conn)
+
+	windowStart := time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC)
+	windowEnd := time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC)
+
+	before := sampleEvent("before")
+	before.CreatedAt = windowStart.Add(-time.Second)
+	atStart := sampleEvent("at-start")
+	atStart.CreatedAt = windowStart
+	inside := sampleEvent("inside")
+	inside.CreatedAt = windowStart.Add(12 * time.Hour)
+	atEnd := sampleEvent("at-end")
+	atEnd.CreatedAt = windowEnd
+	after := sampleEvent("after")
+	after.CreatedAt = windowEnd.Add(time.Second)
+
+	_, err := repo.InsertBatch(ctx, []Event{before, atStart, inside, atEnd, after})
+	require.NoError(t, err)
+
+	got, err := repo.ListEventsInWindow(ctx, windowStart, windowEnd)
+	require.NoError(t, err)
+
+	gotIDs := make([]string, 0, len(got))
+	for _, e := range got {
+		gotIDs = append(gotIDs, e.ID)
+	}
+	assert.ElementsMatch(t, []string{"at-start", "inside"}, gotIDs,
+		"start is inclusive, end is exclusive")
+}
+
+// TestRepo_ListEventsInWindow_ReturnsEveryColumnUnchanged proves the
+// round-trip through the sqlc-generated row type back into this
+// package's own Event preserves every field InsertBatch wrote — not just
+// the ones the window filter itself depends on (CreatedAt).
+func TestRepo_ListEventsInWindow_ReturnsEveryColumnUnchanged(t *testing.T) {
+	ctx := context.Background()
+	conn := newTestDB(t)
+	repo := NewRepo(conn)
+
+	want := sampleEvent("msg-full")
+	_, err := repo.InsertBatch(ctx, []Event{want})
+	require.NoError(t, err)
+
+	got, err := repo.ListEventsInWindow(ctx, want.CreatedAt, want.CreatedAt.Add(time.Second))
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, want, got[0])
+}
+
 func TestI4_UsageRepoOnlyQueriesUsageEventsTable(t *testing.T) {
 	root := repoRootForTests(t)
 	queriesDir := filepath.Join(root, "db", "queries")

@@ -182,6 +182,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/usage/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Usage totals and one-dimension breakdown for a time window.
+         * @description story-1/ticket-14: the console's own read surface over `usage_events` (`_rules/../story-1/_contract/contract.md`'s "API surface" section — wire field names below are copied verbatim from that contract, including its `snake_case` `group_by`/`reporting_installs`, which deliberately breaks from this surface's own camelCase convention elsewhere; not "corrected" here since the contract is this ticket's literal input, not something to reopen). `window` selects the [start, now) range (`today`/`week`/`month` are calendar-anchored at UTC midnight/Monday/1st; `5h`/`24h` are rolling); `group_by` picks which dimension the `breakdown` array is keyed by. `totals.tokens` sums all four raw token counters per event (input + output + cache_read + cache_creation) — a single display number, distinct from ticket 9's "never summed into each other" rule about the *stored* per-field columns, which this endpoint only ever reads, never rewrites. `reporting_installs` is the count of distinct `machine` values with at least one event inside the selected window (not lifetime) — the goal's partial-view caveat, scoped to what the rest of this response actually covers.
+         *
+         *     `lifetime` is a sixth value, additive to the contract's own fixed five (`_contract/contract.md`'s API surface section names exactly `5h|24h|today|week|month`) — flagged as a build-time decision in ticket 14's own report, not silently added: the ticket's own mockup spec names a "lifetime cost" summary tile, which none of the five contract windows can answer (each has a bounded start). Query-string-additive only — `GET /usage/windows`' own fixed table is untouched, still exactly those five, in that order. `lifetime` covers every event ever ingested up to now, with no left bound.
+         */
+        get: operations["getUsageSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/usage/windows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Turns/tokens/cost for each of the fixed 5h/24h/today/week/month windows.
+         * @description story-1/ticket-14: backs the console's time-window table — one row per fixed window, each computed the same way `getUsageSummary`'s own `window` parameter computes its range, with no `group_by` (each row is this service's whole reporting surface's totals for that window, not split by dimension).
+         */
+        get: operations["getUsageWindows"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -331,6 +373,47 @@ export interface components {
             to?: string | null;
             /** @description field_changed — which field `to` changes: `title` | `priority` | `dueDate`. */
             field?: string;
+        };
+        UsageTotals: {
+            /** Format: int64 */
+            tokens: number;
+            /** Format: double */
+            cost: number;
+            /** Format: int64 */
+            turns: number;
+        };
+        UsageBreakdownRow: {
+            /** @description The raw dimension value (an actor name, a canonicalized path, or a machine's `install_id`) — display shortening (contract's "Console display rules", `path` basename/collision handling) is the SPA's own job, not this endpoint's; this is always the ground-truth value. */
+            key: string;
+            /** Format: int64 */
+            tokens: number;
+            /** Format: double */
+            cost: number;
+            /** Format: int64 */
+            turns: number;
+        };
+        UsageSummary: {
+            totals: components["schemas"]["UsageTotals"];
+            /** @description Every distinct key for the requested group_by within the window, cost descending. */
+            breakdown: components["schemas"]["UsageBreakdownRow"][];
+            /**
+             * Format: int64
+             * @description Distinct `machine`s with at least one event inside the selected window — not lifetime.
+             */
+            reporting_installs: number;
+        };
+        UsageWindowRow: {
+            /** @enum {string} */
+            window: "5h" | "24h" | "today" | "week" | "month";
+            /** Format: int64 */
+            turns: number;
+            /** Format: int64 */
+            tokens: number;
+            /** Format: double */
+            cost: number;
+        };
+        UsageWindows: {
+            windows: components["schemas"]["UsageWindowRow"][];
         };
         Error: {
             error: {
@@ -635,6 +718,52 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    getUsageSummary: {
+        parameters: {
+            query: {
+                window: "5h" | "24h" | "today" | "week" | "month" | "lifetime";
+                group_by: "actor" | "path" | "machine";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Totals, a breakdown by the requested dimension, and the window-scoped reporting-install count. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageSummary"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    getUsageWindows: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One row per fixed window, in 5h, 24h, today, week, month order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageWindows"];
                 };
             };
             401: components["responses"]["Unauthorized"];

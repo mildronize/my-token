@@ -84,7 +84,7 @@ func newBFFRouterForOwnerSharedDB(t *testing.T) (router *gin.Engine, sessionValu
 	idp := newFakeIDP(t, "test-client")
 	cfg := idp.testConfig()
 	signer := NewSigner([]byte(cfg.SessionSecret))
-	router = newTestRouter(cfg, signer, newIDVerifier(t, idp), repo, todoSvc, identitySvc)
+	router = newTestRouter(cfg, signer, newIDVerifier(t, idp), repo, todoSvc, identitySvc, nil)
 
 	var err error
 	sessionValue, err = signer.NewSessionCookie(owner.ID)

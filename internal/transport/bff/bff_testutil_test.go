@@ -28,6 +28,7 @@ import (
 
 	"github.com/mildronize/my-template/internal/bffapi"
 	"github.com/mildronize/my-template/internal/domain/todo"
+	"github.com/mildronize/my-template/internal/domain/usage"
 	"github.com/mildronize/my-template/internal/identity"
 	"github.com/mildronize/my-template/internal/platform"
 	"github.com/mildronize/my-template/internal/transport/publicapi"
@@ -235,7 +236,7 @@ func newIDVerifier(t *testing.T, f *fakeIDP) identity.JWTVerifier {
 // TodoServer — nil is an acceptable value for any test that only
 // exercises the todo or me endpoints, since KeysServer.Service is never
 // dereferenced unless a keys route is actually hit.
-func newTestRouter(cfg *platform.Config, signer *Signer, idVerifier identity.JWTVerifier, repo *identity.Repo, todoSvc *todo.Service, identitySvc *identity.Service) *gin.Engine {
+func newTestRouter(cfg *platform.Config, signer *Signer, idVerifier identity.JWTVerifier, repo *identity.Repo, todoSvc *todo.Service, identitySvc *identity.Service, usageSvc *usage.Service) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	logger := testLogger()
@@ -257,6 +258,7 @@ func newTestRouter(cfg *platform.Config, signer *Signer, idVerifier identity.JWT
 		KeysServer:  NewKeysServer(identitySvc),
 		TodoServer:  NewTodoServer(todoSvc),
 		UsersServer: NewUsersServer(identitySvc),
+		UsageServer: NewUsageServer(usageSvc),
 	})
 
 	return r
@@ -272,6 +274,7 @@ type testBFFServer struct {
 	*KeysServer
 	*TodoServer
 	*UsersServer
+	*UsageServer
 }
 
 var _ bffapi.ServerInterface = testBFFServer{}

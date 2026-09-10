@@ -52,3 +52,57 @@ func (q *Queries) InsertUsageEventIgnoreDuplicate(ctx context.Context, arg Inser
 	}
 	return result.RowsAffected()
 }
+
+const listUsageEventsInWindow = `-- name: ListUsageEventsInWindow :many
+SELECT id, session_id, actor, path, machine, model, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, cost, source, created_at
+FROM usage_events
+WHERE created_at >= ?1 AND created_at < ?2
+`
+
+type ListUsageEventsInWindowParams struct {
+	RangeStart time.Time `json:"range_start"`
+	RangeEnd   time.Time `json:"range_end"`
+}
+
+// story-1/ticket-14: every event whose created_at falls between the two
+// bound parameters below, range_start inclusive, range_end exclusive.
+// The raw rows behind the console's own read surface --
+// internal/domain/usage/summary.go's Aggregate does the group_by/window
+// math in Go, pure and unit-testable without sqlc/a real database; this
+// query's only job is the window filter itself.
+func (q *Queries) ListUsageEventsInWindow(ctx context.Context, arg ListUsageEventsInWindowParams) ([]UsageEvent, error) {
+	rows, err := q.db.QueryContext(ctx, listUsageEventsInWindow, arg.RangeStart, arg.RangeEnd)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []UsageEvent
+	for rows.Next() {
+		var i UsageEvent
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.Actor,
+			&i.Path,
+			&i.Machine,
+			&i.Model,
+			&i.InputTokens,
+			&i.OutputTokens,
+			&i.CacheReadInputTokens,
+			&i.CacheCreationInputTokens,
+			&i.Cost,
+			&i.Source,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

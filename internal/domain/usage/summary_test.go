@@ -1,0 +1,293 @@
+package usage
+
+import (
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// --- ParseWindow / ParseGroupBy ---------------------------------------
+
+func TestParseWindow_ValidValues(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want Window
+	}{
+		{"5h", Window5h},
+		{"24h", Window24h},
+		{"today", WindowToday},
+		{"week", WindowWeek},
+		{"month", WindowMonth},
+		{"lifetime", WindowLifetime},
+	} {
+		got, ok := ParseWindow(tc.in)
+		assert.True(t, ok, tc.in)
+		assert.Equal(t, tc.want, got, tc.in)
+	}
+}
+
+func TestParseWindow_InvalidValue(t *testing.T) {
+	_, ok := ParseWindow("hour")
+	assert.False(t, ok)
+	_, ok = ParseWindow("")
+	assert.False(t, ok)
+}
+
+func TestParseGroupBy_ValidValues(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want GroupBy
+	}{
+		{"actor", GroupByActor},
+		{"path", GroupByPath},
+		{"machine", GroupByMachine},
+	} {
+		got, ok := ParseGroupBy(tc.in)
+		assert.True(t, ok, tc.in)
+		assert.Equal(t, tc.want, got, tc.in)
+	}
+}
+
+func TestParseGroupBy_InvalidValue(t *testing.T) {
+	_, ok := ParseGroupBy("session")
+	assert.False(t, ok)
+}
+
+// --- WindowBounds: rolling windows (5h, 24h) ---------------------------
+
+func TestWindowBounds_5h_IsRollingFiveHoursEndingNow(t *testing.T) {
+	now := time.Date(2026, 9, 10, 14, 37, 0, 0, time.UTC)
+	start, end, err := WindowBounds(Window5h, now)
+	require.NoError(t, err)
+	assert.Equal(t, now, end)
+	assert.Equal(t, now.Add(-5*time.Hour), start)
+}
+
+func TestWindowBounds_24h_IsRollingTwentyFourHoursEndingNow(t *testing.T) {
+	now := time.Date(2026, 9, 10, 0, 15, 0, 0, time.UTC)
+	start, end, err := WindowBounds(Window24h, now)
+	require.NoError(t, err)
+	assert.Equal(t, now, end)
+	assert.Equal(t, now.Add(-24*time.Hour), start)
+}
+
+// --- WindowBounds: calendar-anchored windows (today, week, month) ------
+
+func TestWindowBounds_Today_StartsAtUTCMidnightOfNow(t *testing.T) {
+	now := time.Date(2026, 9, 10, 23, 59, 59, 0, time.UTC)
+	start, end, err := WindowBounds(WindowToday, now)
+	require.NoError(t, err)
+	assert.Equal(t, now, end)
+	assert.Equal(t, time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC), start)
+}
+
+func TestWindowBounds_Today_JustAfterMidnightStillAnchorsToTheSameDay(t *testing.T) {
+	now := time.Date(2026, 9, 10, 0, 0, 1, 0, time.UTC)
+	start, _, err := WindowBounds(WindowToday, now)
+	require.NoError(t, err)
+	assert.Equal(t, time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC), start)
+}
+
+// 2026-09-10 is a Thursday — the most recent Monday is 2026-09-07.
+func TestWindowBounds_Week_StartsAtMostRecentUTCMonday(t *testing.T) {
+	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	start, end, err := WindowBounds(WindowWeek, now)
+	require.NoError(t, err)
+	assert.Equal(t, now, end)
+	assert.Equal(t, time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC), start)
+	assert.Equal(t, time.Monday, start.Weekday())
+}
+
+// A Monday itself is the start of its own week — zero days back, not
+// treated as "the previous Monday" (an off-by-one that would otherwise
+// silently include an extra week).
+func TestWindowBounds_Week_OnAMondayStartsToday(t *testing.T) {
+	now := time.Date(2026, 9, 7, 9, 0, 0, 0, time.UTC)
+	start, _, err := WindowBounds(WindowWeek, now)
+	require.NoError(t, err)
+	assert.Equal(t, time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC), start)
+}
+
+// A Sunday is 6 days after its week's Monday — the largest offset the
+// modulo arithmetic has to get right.
+func TestWindowBounds_Week_OnASundayGoesBackSixDays(t *testing.T) {
+	now := time.Date(2026, 9, 13, 23, 0, 0, 0, time.UTC) // Sunday
+	require.Equal(t, time.Sunday, now.Weekday())
+	start, _, err := WindowBounds(WindowWeek, now)
+	require.NoError(t, err)
+	assert.Equal(t, time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC), start)
+}
+
+func TestWindowBounds_Month_StartsAtTheFirstOfTheCurrentUTCMonth(t *testing.T) {
+	now := time.Date(2026, 9, 30, 23, 59, 0, 0, time.UTC)
+	start, end, err := WindowBounds(WindowMonth, now)
+	require.NoError(t, err)
+	assert.Equal(t, now, end)
+	assert.Equal(t, time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), start)
+}
+
+func TestWindowBounds_NonUTCNowIsNormalizedToUTCFirst(t *testing.T) {
+	loc := time.FixedZone("UTC+7", 7*60*60)
+	// 2026-09-10 01:00 +07:00 is 2026-09-09 18:00 UTC — a different
+	// calendar day. "today" must anchor to the UTC day, not the input's
+	// own local day.
+	now := time.Date(2026, 9, 10, 1, 0, 0, 0, loc)
+	start, end, err := WindowBounds(WindowToday, now)
+	require.NoError(t, err)
+	assert.Equal(t, time.Date(2026, 9, 9, 0, 0, 0, 0, time.UTC), start)
+	assert.Equal(t, now.UTC(), end)
+}
+
+// TestWindowBounds_Lifetime_HasNoLeftBoundWithinPlausibleRange proves
+// WindowLifetime's start is comfortably before any real usage_events row
+// could exist — the additive tile-only window (see WindowLifetime's own
+// doc comment) — without hardcoding the exact sentinel value.
+func TestWindowBounds_Lifetime_HasNoLeftBoundWithinPlausibleRange(t *testing.T) {
+	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	start, end, err := WindowBounds(WindowLifetime, now)
+	require.NoError(t, err)
+	assert.Equal(t, now, end)
+	assert.True(t, start.Before(time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)))
+}
+
+// TestWindows_DoesNotIncludeLifetime proves GET /usage/windows' own fixed
+// table stays exactly the contract's five, unaffected by WindowLifetime
+// being a valid ParseWindow value elsewhere.
+func TestWindows_DoesNotIncludeLifetime(t *testing.T) {
+	for _, w := range Windows {
+		assert.NotEqual(t, WindowLifetime, w)
+	}
+	assert.Len(t, Windows, 5)
+}
+
+func TestWindowBounds_UnknownWindow_Errors(t *testing.T) {
+	_, _, err := WindowBounds(Window("fortnight"), time.Now())
+	assert.Error(t, err)
+}
+
+// --- Aggregate: group_by dimensions -------------------------------------
+
+func ev(actor, path, machine string, in, out, cacheRead, cacheCreate int64, cost float64) Event {
+	return Event{
+		Actor:                    actor,
+		Path:                     path,
+		Machine:                  machine,
+		InputTokens:              in,
+		OutputTokens:             out,
+		CacheReadInputTokens:     cacheRead,
+		CacheCreationInputTokens: cacheCreate,
+		Cost:                     cost,
+	}
+}
+
+func TestAggregate_EmptyInput_ZeroTotalsNoBreakdownNoInstalls(t *testing.T) {
+	got := Aggregate(nil, GroupByActor)
+	assert.Equal(t, Totals{}, got.Totals)
+	assert.Empty(t, got.Breakdown)
+	assert.Equal(t, int64(0), got.ReportingInstalls)
+}
+
+func TestAggregate_ByActor_SumsTokensCostTurnsPerActor(t *testing.T) {
+	events := []Event{
+		ev("freya", "p1", "m1", 100, 50, 10, 5, 1.0), // tokens=165
+		ev("freya", "p2", "m1", 200, 0, 0, 0, 2.0),   // tokens=200
+		ev("nicole", "p1", "m1", 10, 10, 0, 0, 0.1),  // tokens=20
+	}
+	got := Aggregate(events, GroupByActor)
+
+	assert.Equal(t, int64(385), got.Totals.Tokens)
+	assert.InDelta(t, 3.1, got.Totals.Cost, 1e-9)
+	assert.Equal(t, int64(3), got.Totals.Turns)
+
+	require.Len(t, got.Breakdown, 2)
+	// cost descending: freya (3.0) before nicole (0.1)
+	assert.Equal(t, "freya", got.Breakdown[0].Key)
+	assert.Equal(t, int64(365), got.Breakdown[0].Tokens)
+	assert.InDelta(t, 3.0, got.Breakdown[0].Cost, 1e-9)
+	assert.Equal(t, int64(2), got.Breakdown[0].Turns)
+
+	assert.Equal(t, "nicole", got.Breakdown[1].Key)
+	assert.Equal(t, int64(20), got.Breakdown[1].Tokens)
+	assert.InDelta(t, 0.1, got.Breakdown[1].Cost, 1e-9)
+	assert.Equal(t, int64(1), got.Breakdown[1].Turns)
+}
+
+func TestAggregate_ByPath_GroupsOnPathNotActor(t *testing.T) {
+	events := []Event{
+		ev("freya", "/gits/my-task", "m1", 100, 0, 0, 0, 1.0),
+		ev("nicole", "/gits/my-task", "m1", 100, 0, 0, 0, 1.0),
+		ev("freya", "/gits/my-token", "m1", 100, 0, 0, 0, 5.0),
+	}
+	got := Aggregate(events, GroupByPath)
+
+	require.Len(t, got.Breakdown, 2)
+	assert.Equal(t, "/gits/my-token", got.Breakdown[0].Key) // higher cost first
+	assert.InDelta(t, 5.0, got.Breakdown[0].Cost, 1e-9)
+	assert.Equal(t, "/gits/my-task", got.Breakdown[1].Key)
+	assert.InDelta(t, 2.0, got.Breakdown[1].Cost, 1e-9)
+	assert.Equal(t, int64(2), got.Breakdown[1].Turns)
+}
+
+func TestAggregate_ByMachine_GroupsOnMachine(t *testing.T) {
+	events := []Event{
+		ev("freya", "p1", "install-a", 100, 0, 0, 0, 1.0),
+		ev("freya", "p1", "install-b", 100, 0, 0, 0, 3.0),
+	}
+	got := Aggregate(events, GroupByMachine)
+
+	require.Len(t, got.Breakdown, 2)
+	assert.Equal(t, "install-b", got.Breakdown[0].Key)
+	assert.Equal(t, "install-a", got.Breakdown[1].Key)
+}
+
+func TestAggregate_BreakdownTieBrokenByKeyAscending(t *testing.T) {
+	events := []Event{
+		ev("zeta", "p", "m", 10, 0, 0, 0, 1.0),
+		ev("alpha", "p", "m", 10, 0, 0, 0, 1.0),
+	}
+	got := Aggregate(events, GroupByActor)
+	require.Len(t, got.Breakdown, 2)
+	assert.Equal(t, "alpha", got.Breakdown[0].Key)
+	assert.Equal(t, "zeta", got.Breakdown[1].Key)
+}
+
+// --- Aggregate: reporting_installs (window-scoped, not lifetime) -------
+
+func TestAggregate_ReportingInstalls_CountsDistinctMachinesInGivenEventsOnly(t *testing.T) {
+	events := []Event{
+		ev("freya", "p1", "install-a", 10, 0, 0, 0, 1.0),
+		ev("freya", "p2", "install-a", 10, 0, 0, 0, 1.0), // same machine again
+		ev("nicole", "p1", "install-b", 10, 0, 0, 0, 1.0),
+	}
+	got := Aggregate(events, GroupByActor)
+	assert.Equal(t, int64(2), got.ReportingInstalls)
+}
+
+// This is the whole point of "window-scoped, not lifetime": Aggregate has
+// no notion of "every machine that ever reported" at all — it can only
+// ever count machines present in the slice it's handed, which
+// Service.Summary/Windows already filtered to the requested window
+// (repo.go's ListEventsInWindow). A machine with events entirely outside
+// the window is structurally invisible here, not filtered out by a
+// separate step that could be forgotten.
+func TestAggregate_ReportingInstalls_IsIndependentOfGroupByDimension(t *testing.T) {
+	events := []Event{
+		ev("freya", "p1", "install-a", 10, 0, 0, 0, 1.0),
+		ev("freya", "p1", "install-b", 10, 0, 0, 0, 1.0),
+	}
+	byActor := Aggregate(events, GroupByActor)
+	byPath := Aggregate(events, GroupByPath)
+	byMachine := Aggregate(events, GroupByMachine)
+
+	assert.Equal(t, int64(2), byActor.ReportingInstalls)
+	assert.Equal(t, int64(2), byPath.ReportingInstalls)
+	assert.Equal(t, int64(2), byMachine.ReportingInstalls)
+}
+
+func TestAggregate_ReportingInstalls_IgnoresEmptyMachineString(t *testing.T) {
+	events := []Event{ev("freya", "p1", "", 10, 0, 0, 0, 1.0)}
+	got := Aggregate(events, GroupByActor)
+	assert.Equal(t, int64(0), got.ReportingInstalls)
+}

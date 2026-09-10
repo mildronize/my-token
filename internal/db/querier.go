@@ -151,6 +151,13 @@ type Querier interface {
 	// (dbquery.ReadOnlyGrants: "todos.sql" / "users") - this file owns
 	// "todos", not "users".
 	ListTodos(ctx context.Context) ([]ListTodosRow, error)
+	// story-1/ticket-14: every event whose created_at falls between the two
+	// bound parameters below, range_start inclusive, range_end exclusive.
+	// The raw rows behind the console's own read surface --
+	// internal/domain/usage/summary.go's Aggregate does the group_by/window
+	// math in Go, pure and unit-testable without sqlc/a real database; this
+	// query's only job is the window filter itself.
+	ListUsageEventsInWindow(ctx context.Context, arg ListUsageEventsInWindowParams) ([]UsageEvent, error)
 	RevokeAPIKey(ctx context.Context, arg RevokeAPIKeyParams) (ApiKey, error)
 	// The owner-facing revoke endpoint's own query (I21): session-gated to a
 	// valid owner by the handler above this layer, but not scoped to any

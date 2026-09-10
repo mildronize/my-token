@@ -49,6 +49,15 @@ type Repository interface {
 	// partway through, none of them are — there is no partial-batch state
 	// for a caller to have to reason about.
 	InsertBatch(ctx context.Context, batch []Event) (inserted int64, err error)
+
+	// ListEventsInWindow returns every event whose CreatedAt falls in the
+	// half-open range [start, end) — story-1/ticket-14's own read path,
+	// backing Service.Summary/Service.Windows. This is the only place the
+	// window boundary is applied at the data layer; everything else
+	// (group_by aggregation, totals, reporting_installs) is pure Go over
+	// the returned slice (summary.go's Aggregate) so it's testable
+	// without a database.
+	ListEventsInWindow(ctx context.Context, start, end time.Time) ([]Event, error)
 }
 
 // Repo is the only type in this package that imports the sqlc-generated
@@ -112,4 +121,37 @@ func (r *Repo) InsertBatch(ctx context.Context, batch []Event) (int64, error) {
 		return 0, err
 	}
 	return inserted, nil
+}
+
+// ListEventsInWindow implements Repository.ListEventsInWindow — a single
+// read query, no aggregation at this layer (summary.go's Aggregate does
+// that in Go, over whatever this returns).
+func (r *Repo) ListEventsInWindow(ctx context.Context, start, end time.Time) ([]Event, error) {
+	rows, err := r.q.ListUsageEventsInWindow(ctx, db.ListUsageEventsInWindowParams{
+		RangeStart: start,
+		RangeEnd:   end,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	events := make([]Event, 0, len(rows))
+	for _, row := range rows {
+		events = append(events, Event{
+			ID:                       row.ID,
+			SessionID:                row.SessionID,
+			Actor:                    row.Actor,
+			Path:                     row.Path,
+			Machine:                  row.Machine,
+			Model:                    row.Model,
+			InputTokens:              row.InputTokens,
+			OutputTokens:             row.OutputTokens,
+			CacheReadInputTokens:     row.CacheReadInputTokens,
+			CacheCreationInputTokens: row.CacheCreationInputTokens,
+			Cost:                     row.Cost,
+			Source:                   row.Source,
+			CreatedAt:                row.CreatedAt,
+		})
+	}
+	return events, nil
 }

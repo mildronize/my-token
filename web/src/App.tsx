@@ -20,6 +20,7 @@ import TodosPage from "~/app/TodosPage";
 import TodoDetailPage from "~/app/todos/TodoDetailPage";
 import ActivityPage from "~/app/activity/ActivityPage";
 import SettingsPage from "~/app/settings/page";
+import UsagePage from "~/app/usage/UsagePage";
 
 export default function App() {
   return (
@@ -33,6 +34,7 @@ export default function App() {
                 <Route path="/" element={<TodosPage />} />
                 <Route path="/todos/:id" element={<TodoDetailPage />} />
                 <Route path="/activity" element={<ActivityPage />} />
+                <Route path="/usage" element={<UsagePage />} />
                 <Route path="/settings" element={<SettingsPage />} />
               </Routes>
             </AppLayout>
