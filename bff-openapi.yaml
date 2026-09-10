@@ -1,6 +1,6 @@
 openapi: 3.0.3
 info:
-  title: my-template BFF API
+  title: my-token BFF API
   version: "1.0.0"
   description: >
     The BFF's session-authenticated JSON surface (milestone-3

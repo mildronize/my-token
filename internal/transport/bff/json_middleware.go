@@ -22,8 +22,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/mildronize/my-template/internal/identity"
-	"github.com/mildronize/my-template/internal/transport/publicapi"
+	"github.com/mildronize/my-token/internal/identity"
+	"github.com/mildronize/my-token/internal/transport/publicapi"
 )
 
 // jsonUnauthorizedBody is the one 401 response body RequireJSONSession

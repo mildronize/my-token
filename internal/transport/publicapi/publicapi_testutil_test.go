@@ -17,10 +17,10 @@ import (
 
 	_ "modernc.org/sqlite" // registers the "sqlite" database/sql driver for these tests
 
-	"github.com/mildronize/my-template/internal/api"
-	"github.com/mildronize/my-template/internal/domain/todo"
-	"github.com/mildronize/my-template/internal/domain/usage"
-	"github.com/mildronize/my-template/internal/identity"
+	"github.com/mildronize/my-token/internal/api"
+	"github.com/mildronize/my-token/internal/domain/todo"
+	"github.com/mildronize/my-token/internal/domain/usage"
+	"github.com/mildronize/my-token/internal/identity"
 )
 
 func init() {

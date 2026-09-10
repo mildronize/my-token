@@ -6,8 +6,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/mildronize/my-template/internal/bffapi"
-	"github.com/mildronize/my-template/internal/domain/usage"
+	"github.com/mildronize/my-token/internal/bffapi"
+	"github.com/mildronize/my-token/internal/domain/usage"
 )
 
 // UsageServer adapts usage.Service's read side to internal/bffapi's

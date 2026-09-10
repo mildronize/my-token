@@ -6,8 +6,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/mildronize/my-template/internal/api"
-	"github.com/mildronize/my-template/internal/identity"
+	"github.com/mildronize/my-token/internal/api"
+	"github.com/mildronize/my-token/internal/identity"
 )
 
 // notFoundBody is the one 404 response body RevokeKey ever writes for an

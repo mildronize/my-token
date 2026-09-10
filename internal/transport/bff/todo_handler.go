@@ -8,9 +8,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/mildronize/my-template/internal/bffapi"
-	"github.com/mildronize/my-template/internal/domain/todo"
-	"github.com/mildronize/my-template/internal/transport/publicapi"
+	"github.com/mildronize/my-token/internal/bffapi"
+	"github.com/mildronize/my-token/internal/domain/todo"
+	"github.com/mildronize/my-token/internal/transport/publicapi"
 )
 
 // bffActivityDefaultLimit mirrors my-task's own activity.list default

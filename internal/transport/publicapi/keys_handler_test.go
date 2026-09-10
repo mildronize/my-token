@@ -14,8 +14,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/mildronize/my-template/internal/api"
-	"github.com/mildronize/my-template/internal/identity"
+	"github.com/mildronize/my-token/internal/api"
+	"github.com/mildronize/my-token/internal/identity"
 )
 
 // newKeysIntegrationRouter builds a full /api/v1 stack — RejectActorFields,

@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/mildronize/my-template/internal/api"
+	"github.com/mildronize/my-token/internal/api"
 )
 
 // decodeIngestResponse decodes an api.IngestUsageEventsBatchResponse-shaped

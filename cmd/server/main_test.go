@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/mildronize/my-template/internal/platform"
+	"github.com/mildronize/my-token/internal/platform"
 
 	_ "modernc.org/sqlite" // registers the "sqlite" database/sql driver for this test
 )

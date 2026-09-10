@@ -19,9 +19,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/mildronize/my-template/internal/bffapi"
-	"github.com/mildronize/my-template/internal/domain/usage"
-	"github.com/mildronize/my-template/internal/identity"
+	"github.com/mildronize/my-token/internal/bffapi"
+	"github.com/mildronize/my-token/internal/domain/usage"
+	"github.com/mildronize/my-token/internal/identity"
 )
 
 // seedUsageEvent inserts one usage_events row directly (bypassing

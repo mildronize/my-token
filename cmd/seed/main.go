@@ -30,8 +30,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/mildronize/my-template/internal/identity"
-	"github.com/mildronize/my-template/internal/platform"
+	"github.com/mildronize/my-token/internal/identity"
+	"github.com/mildronize/my-token/internal/platform"
 )
 
 // ownerHandle is the fixed handle the seeded owner row gets — not

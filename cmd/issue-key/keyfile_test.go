@@ -24,7 +24,7 @@ func requireBash(t *testing.T) {
 
 // resolverEnv builds a clean environment for exec.Command'ing the resolver
 // script: PATH (needed to locate bash via the script's own #!/usr/bin/env
-// bash shebang), HOME, and exactly the MY_TEMPLATE_CREW/TYP_CREW_NAME
+// bash shebang), HOME, and exactly the MY_TOKEN_CREW/TYP_CREW_NAME
 // values a test wants (both cleared unless overridden). Built as a map, so
 // there is no duplicate-entry ambiguity to worry about — never
 // os.Environ() appended-to directly, since this host (a typ-fleet crew
@@ -33,7 +33,7 @@ func requireBash(t *testing.T) {
 // means to test the argument/HOME it passes explicitly.
 func resolverEnv(t *testing.T, home string, overrides map[string]string) []string {
 	t.Helper()
-	vars := map[string]string{"HOME": home, "MY_TEMPLATE_CREW": "", "TYP_CREW_NAME": ""}
+	vars := map[string]string{"HOME": home, "MY_TOKEN_CREW": "", "TYP_CREW_NAME": ""}
 	for _, e := range os.Environ() {
 		if strings.HasPrefix(e, "PATH=") {
 			vars["PATH"] = strings.TrimPrefix(e, "PATH=")
@@ -62,7 +62,7 @@ func TestI14_ResolverRefusesPresentButEmptyArgument(t *testing.T) {
 	requireBash(t)
 
 	home := t.TempDir()
-	base := filepath.Join(home, ".my-template")
+	base := filepath.Join(home, ".my-token")
 	scriptPath, err := ensureKeyResolver(base)
 	require.NoError(t, err)
 
@@ -77,12 +77,12 @@ func TestI14_ResolverRefusesPresentButEmptyArgument(t *testing.T) {
 
 // TestI14_ResolverAcceptsNoArgumentAndFallsBackToEnv is the guard's
 // counterpart: truly no argument at all must NOT be refused — only
-// present-but-empty is a mistake. Falls back through MY_TEMPLATE_CREW.
+// present-but-empty is a mistake. Falls back through MY_TOKEN_CREW.
 func TestI14_ResolverAcceptsNoArgumentAndFallsBackToEnv(t *testing.T) {
 	requireBash(t)
 
 	home := t.TempDir()
-	base := filepath.Join(home, ".my-template")
+	base := filepath.Join(home, ".my-token")
 	scriptPath, err := ensureKeyResolver(base)
 	require.NoError(t, err)
 
@@ -90,7 +90,7 @@ func TestI14_ResolverAcceptsNoArgumentAndFallsBackToEnv(t *testing.T) {
 	require.NoError(t, err)
 
 	cmd := exec.Command(scriptPath) // no argument at all
-	cmd.Env = resolverEnv(t, home, map[string]string{"MY_TEMPLATE_CREW": "agent-a"})
+	cmd.Env = resolverEnv(t, home, map[string]string{"MY_TOKEN_CREW": "agent-a"})
 	out, err := cmd.Output()
 	require.NoError(t, err)
 	assert.Equal(t, "tpl_fallback_via_env", strings.TrimSpace(string(out)))
@@ -105,7 +105,7 @@ func TestI14_IssueAndRotateLeaveWorkingKeyFileForResolver(t *testing.T) {
 	requireBash(t)
 
 	home := t.TempDir()
-	base := filepath.Join(home, ".my-template")
+	base := filepath.Join(home, ".my-token")
 
 	keyPath, err := writeKeyFile(base, "agent-a", "tpl_first_issued_key")
 	require.NoError(t, err)
@@ -145,7 +145,7 @@ func TestI14_ResolverMissingKeyFileFailsClearly(t *testing.T) {
 	requireBash(t)
 
 	home := t.TempDir()
-	base := filepath.Join(home, ".my-template")
+	base := filepath.Join(home, ".my-token")
 	scriptPath, err := ensureKeyResolver(base)
 	require.NoError(t, err)
 
@@ -163,7 +163,7 @@ func TestI14_ResolverMissingKeyFileFailsClearly(t *testing.T) {
 // third call restores the canonical script), and content is always
 // exactly resolverScript afterward.
 func TestEnsureKeyResolver_IdempotentWriteIfMissingOrStale(t *testing.T) {
-	base := filepath.Join(t.TempDir(), ".my-template")
+	base := filepath.Join(t.TempDir(), ".my-token")
 
 	path, err := ensureKeyResolver(base)
 	require.NoError(t, err)
@@ -187,7 +187,7 @@ func TestEnsureKeyResolver_IdempotentWriteIfMissingOrStale(t *testing.T) {
 }
 
 func TestWriteKeyFile_CreatesKeysDirAndFileWithMode0600(t *testing.T) {
-	base := filepath.Join(t.TempDir(), ".my-template")
+	base := filepath.Join(t.TempDir(), ".my-token")
 
 	path, err := writeKeyFile(base, "some-handle", "tpl_the_raw_value")
 	require.NoError(t, err)

@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/mildronize/my-template/internal/db"
+	"github.com/mildronize/my-token/internal/db"
 )
 
 // Event is this package's own representation of one usage_events row to

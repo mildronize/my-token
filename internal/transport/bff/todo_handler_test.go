@@ -10,9 +10,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/mildronize/my-template/internal/bffapi"
-	"github.com/mildronize/my-template/internal/domain/todo"
-	"github.com/mildronize/my-template/internal/identity"
+	"github.com/mildronize/my-token/internal/bffapi"
+	"github.com/mildronize/my-token/internal/domain/todo"
+	"github.com/mildronize/my-token/internal/identity"
 )
 
 // decodeBFFTodo decodes a bffapi.Todo-shaped response body — todo-specific

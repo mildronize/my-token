@@ -8,7 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/mildronize/my-template/internal/identity"
+	"github.com/mildronize/my-token/internal/identity"
 )
 
 // actorContextKey is this package's own gin-context key for the resolved

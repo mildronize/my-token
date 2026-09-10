@@ -6,7 +6,7 @@ import (
 
 	"github.com/pressly/goose/v3"
 
-	migrations "github.com/mildronize/my-template/db/migrations"
+	migrations "github.com/mildronize/my-token/db/migrations"
 )
 
 // Migrate applies every pending goose migration in db/migrations (embedded

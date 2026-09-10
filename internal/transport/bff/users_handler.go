@@ -5,8 +5,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/mildronize/my-template/internal/bffapi"
-	"github.com/mildronize/my-template/internal/identity"
+	"github.com/mildronize/my-token/internal/bffapi"
+	"github.com/mildronize/my-token/internal/identity"
 )
 
 // UsersServer adapts identity.Service to internal/bffapi's generated

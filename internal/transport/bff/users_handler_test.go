@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/mildronize/my-template/internal/bffapi"
+	"github.com/mildronize/my-token/internal/bffapi"
 )
 
 // decodeUserList decodes GET /api/bff/users' response body.

@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/mildronize/my-template/internal/identity"
-	"github.com/mildronize/my-template/internal/platform"
+	"github.com/mildronize/my-token/internal/identity"
+	"github.com/mildronize/my-token/internal/platform"
 )
 
 // newSeedTestRepo opens a fresh, fully-migrated SQLite file in a temp dir

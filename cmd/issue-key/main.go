@@ -25,10 +25,10 @@
 //
 // Both paths print the raw key to stdout exactly once — it is never
 // stored anywhere (I8) and cannot be recovered later, only rotated again
-// or revoked — AND (I14) write it to ~/.my-template/keys/<handle> (mode
-// 0600) and ensure ~/.my-template/bin/key (a resolver script ported from
+// or revoked — AND (I14) write it to ~/.my-token/keys/<handle> (mode
+// 0600) and ensure ~/.my-token/bin/key (a resolver script ported from
 // my-task's own, see keyfile.go) exists, so recovering after a rotation is
-// `$(~/.my-template/bin/key)`, not a manual copy-paste out of a terminal.
+// `$(~/.my-token/bin/key)`, not a manual copy-paste out of a terminal.
 package main
 
 import (
@@ -38,8 +38,8 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/mildronize/my-template/internal/identity"
-	"github.com/mildronize/my-template/internal/platform"
+	"github.com/mildronize/my-token/internal/identity"
+	"github.com/mildronize/my-token/internal/platform"
 )
 
 func main() {
@@ -100,7 +100,7 @@ func newIdentityService() (*identity.Service, func() error, error) {
 // working resolver are guaranteed to exist by the time either command's
 // stdout output is the only thing left for an operator to read.
 func persistKeyAndResolver(handle, rawKey string) error {
-	base, err := myTemplateBaseDir()
+	base, err := myTokenBaseDir()
 	if err != nil {
 		return fmt.Errorf("resolving home directory: %w", err)
 	}

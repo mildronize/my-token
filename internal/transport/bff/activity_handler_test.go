@@ -14,11 +14,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/mildronize/my-template/internal/api"
-	"github.com/mildronize/my-template/internal/bffapi"
-	"github.com/mildronize/my-template/internal/domain/todo"
-	"github.com/mildronize/my-template/internal/identity"
-	"github.com/mildronize/my-template/internal/transport/publicapi"
+	"github.com/mildronize/my-token/internal/api"
+	"github.com/mildronize/my-token/internal/bffapi"
+	"github.com/mildronize/my-token/internal/domain/todo"
+	"github.com/mildronize/my-token/internal/identity"
+	"github.com/mildronize/my-token/internal/transport/publicapi"
 )
 
 // decodeBFFActivityFeed decodes a bffapi.ActivityFeed-shaped response body

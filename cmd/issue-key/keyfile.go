@@ -8,8 +8,8 @@
 // The resolver script's content (resolverScript, below) is ported
 // verbatim from `~/.my-task/bin/key` per _goal/GOAL.md's "Key resolver
 // script — port verbatim, don't rewrite from the description" decision —
-// only names changed (MY_TASK_CREW -> MY_TEMPLATE_CREW, ~/.my-task/ ->
-// ~/.my-template/, and the my-task-specific comment references). The
+// only names changed (MY_TASK_CREW -> MY_TOKEN_CREW, ~/.my-task/ ->
+// ~/.my-token/, and the my-task-specific comment references). The
 // empty-argument guard, its exact reasoning, the fallback chain, and the
 // 0600-is-a-rule-not-isolation point all carry over unchanged in spirit.
 package main
@@ -19,19 +19,19 @@ import (
 	"path/filepath"
 )
 
-// myTemplateBaseDir resolves ~/.my-template — the root both the key
+// myTokenBaseDir resolves ~/.my-token — the root both the key
 // directory and the resolver's bin directory live under. Kept as its own
 // function (rather than inlined at each call site) so the two production
 // callers (run, runRotate) and tests agree on exactly what "home" means;
 // tests never call this directly, they pass an explicit baseDir to
 // writeKeyFile/ensureKeyResolver instead, which is what makes both
 // functions testable without touching a real developer's actual $HOME.
-func myTemplateBaseDir() (string, error) {
+func myTokenBaseDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".my-template"), nil
+	return filepath.Join(home, ".my-token"), nil
 }
 
 // writeKeyFile writes rawKey to <baseDir>/keys/<handle>, mode 0600 (I14).
@@ -82,10 +82,10 @@ func ensureKeyResolver(baseDir string) (string, error) {
 }
 
 // resolverScript is ~/.my-task/bin/key, ported verbatim (see this file's
-// package comment) — only MY_TASK_CREW -> MY_TEMPLATE_CREW,
-// ~/.my-task/ -> ~/.my-template/, and the my-task-specific framing in the
+// package comment) — only MY_TASK_CREW -> MY_TOKEN_CREW,
+// ~/.my-task/ -> ~/.my-token/, and the my-task-specific framing in the
 // comments changed. Everything else — the empty-argument-is-a-mistake
-// guard and its exact error message, the argument -> MY_TEMPLATE_CREW ->
+// guard and its exact error message, the argument -> MY_TOKEN_CREW ->
 // TYP_CREW_NAME fallback chain and the reasoning for why the last step is
 // host-specific, and the 0600-is-a-rule-not-isolation point — carries over
 // on purpose, per _goal/GOAL.md: a resolver written fresh from "resolve
@@ -99,19 +99,19 @@ set -euo pipefail
 # straight into the request and is never echoed, logged, or read into an
 # LLM's context window (see _rules/_contract/INVARIANTS.md, I14):
 #
-#   curl -H "Authorization: Bearer $(~/.my-template/bin/key)" ...
+#   curl -H "Authorization: Bearer $(~/.my-token/bin/key)" ...
 #
 # Call it with NO ARGUMENT wherever the environment already says which crew
 # this is, which is the documented form and the only one a skill should show.
-# Resolution order: explicit argument, then MY_TEMPLATE_CREW, then
+# Resolution order: explicit argument, then MY_TOKEN_CREW, then
 # TYP_CREW_NAME.
 #
 # The last one is host-specific on purpose. This service and its companion
-# skill know only MY_TEMPLATE_CREW; mapping that to whatever a particular
+# skill know only MY_TOKEN_CREW; mapping that to whatever a particular
 # host calls a crew belongs in this resolver, which is a host-side artifact
 # rather than part of the app. Moving to a host that names crews differently
 # is a one-line edit here and touches nothing else. Without it there is
-# nowhere per-crew to set MY_TEMPLATE_CREW at all on a host where every crew
+# nowhere per-crew to set MY_TOKEN_CREW at all on a host where every crew
 # shares one HOME.
 
 # An argument that is PRESENT BUT EMPTY is a mistake, not an omission — it is
@@ -126,17 +126,17 @@ set -euo pipefail
 # mistake on a host of its own.
 if [ "$#" -gt 0 ] && [ -z "$1" ]; then
   echo "key: an argument was given but is empty — a variable in it is unset." >&2
-  echo "     If you meant 'this crew', pass no argument at all: \$(~/.my-template/bin/key)" >&2
+  echo "     If you meant 'this crew', pass no argument at all: \$(~/.my-token/bin/key)" >&2
   exit 1
 fi
 
-CREW="${1-${MY_TEMPLATE_CREW:-${TYP_CREW_NAME:-}}}"
+CREW="${1-${MY_TOKEN_CREW:-${TYP_CREW_NAME:-}}}"
 if [ -z "$CREW" ]; then
-  echo "usage: key <crew>   (or set MY_TEMPLATE_CREW)" >&2
+  echo "usage: key <crew>   (or set MY_TOKEN_CREW)" >&2
   exit 1
 fi
 
-KEY_FILE="$HOME/.my-template/keys/$CREW"
+KEY_FILE="$HOME/.my-token/keys/$CREW"
 if [ ! -f "$KEY_FILE" ]; then
   echo "no key file for crew '$CREW' at $KEY_FILE" >&2
   exit 1

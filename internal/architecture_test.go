@@ -124,7 +124,7 @@ func transportSurfaceNames(t *testing.T, root string) []string {
 }
 
 // modulePath returns this repo's module path (e.g.
-// github.com/mildronize/my-template) via `go list -m`, rather than
+// github.com/mildronize/my-token) via `go list -m`, rather than
 // hardcoding it, so the test keeps working after a fork renames the
 // module (docs/GETTING-STARTED.md).
 func modulePath(t *testing.T, root string) string {

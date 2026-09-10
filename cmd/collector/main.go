@@ -31,7 +31,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/mildronize/my-template/internal/collector"
+	"github.com/mildronize/my-token/internal/collector"
 )
 
 func main() {

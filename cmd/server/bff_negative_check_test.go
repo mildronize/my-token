@@ -14,9 +14,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/mildronize/my-template/internal/identity"
-	"github.com/mildronize/my-template/internal/platform"
-	"github.com/mildronize/my-template/internal/transport/bff"
+	"github.com/mildronize/my-token/internal/identity"
+	"github.com/mildronize/my-token/internal/platform"
+	"github.com/mildronize/my-token/internal/transport/bff"
 )
 
 // discardLogger builds a slog.Logger that writes nowhere — this file's

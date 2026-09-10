@@ -1,12 +1,12 @@
 ---
-name: my-template-api
-description: Call this my-template-based service's /api/v1 REST surface with an agent API key — auth, the invariant rules every request obeys, all eight endpoints, request/response shapes, and the error envelope. Mechanics only, against any instance. There is no separate spec doc; `openapi.yaml` plus this skill and its references are the source of truth.
+name: my-token-api
+description: Call this my-token-based service's /api/v1 REST surface with an agent API key — auth, the invariant rules every request obeys, all eight endpoints, request/response shapes, and the error envelope. Mechanics only, against any instance. There is no separate spec doc; `openapi.yaml` plus this skill and its references are the source of truth.
 ---
 
 # `<service>` API
 
 `/api/v1/*` is a key-authenticated REST surface for agents, scaffolded from
-this repo's `my-template` origin (`_contract/API.md`,
+this repo's `my-token` origin (`_contract/API.md`,
 `_rules/_contract/API.md`). It sits beside a second, owner-facing surface
 (`bff` — a browser login + one authenticated view) that this skill does not
 cover: the owner's operations are **absent** from `/api/v1`, not forbidden
@@ -75,7 +75,7 @@ response.
 
 ### The indistinguishable-401 trap
 
-`Authorization: Bearer $(~/.my-template/bin/key)` expands at the shell —
+`Authorization: Bearer $(~/.my-token/bin/key)` expands at the shell —
 that's the whole point of the resolver, so the raw key value never lands
 in a transcript or a log. But it also means a **resolver failure is
 invisible at the HTTP layer**: if the resolver can't find a key file, or
@@ -89,7 +89,7 @@ detached process) is exposed the same way with no one watching stderr.
 
 **So when you see a 401, look back at what the key command itself
 printed** before concluding the key is bad — run the resolver on its own
-first (`~/.my-template/bin/key`) and confirm it actually produced a
+first (`~/.my-token/bin/key`) and confirm it actually produced a
 value, rather than reasoning about the 401 body. There is nothing in that
 body to reason about: I5 guarantees a missing key, a malformed one, an
 expired one, a revoked one, an inactive user's, and an owner's credential
@@ -285,8 +285,8 @@ validity would be the wrong direction: the old key stops working
 immediately once the new one exists. Anything still holding the old value
 in a shell variable must **re-run the resolver**, not reuse what it
 already expanded — it will not pick up the new key on its own. `issue` and
-`rotate` both also write `~/.my-template/keys/<handle>` and ensure
-`~/.my-template/bin/key` exists (I14), so that re-run is one command, not
+`rotate` both also write `~/.my-token/keys/<handle>` and ensure
+`~/.my-token/bin/key` exists (I14), so that re-run is one command, not
 a manual copy out of a terminal scrollback.
 
 ### `0600` is a rule, not an isolation guarantee
@@ -294,7 +294,7 @@ a manual copy out of a terminal scrollback.
 The key file `issue`/`rotate` write is mode `0600`. That is worth having —
 a deliberate widening of the mode is visible in a diff — but be honest
 about what it does not do: **every crew or process on a shared host runs
-as the same uid**, so every key file under `~/.my-template/keys/` is
+as the same uid**, so every key file under `~/.my-token/keys/` is
 readable by every other crew or process on that host regardless of the
 file's mode bit. `0600` is not a permission boundary between crews on this
 machine; it never was one. If you need that guarantee, it has to come from

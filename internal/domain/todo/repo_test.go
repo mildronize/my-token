@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/mildronize/my-template/internal/dbquery"
+	"github.com/mildronize/my-token/internal/dbquery"
 )
 
 // --- todos: no owner scoping, new fields ----------------------------------

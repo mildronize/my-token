@@ -6,9 +6,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/mildronize/my-template/internal/bffapi"
-	"github.com/mildronize/my-template/internal/identity"
-	"github.com/mildronize/my-template/internal/transport/publicapi"
+	"github.com/mildronize/my-token/internal/bffapi"
+	"github.com/mildronize/my-token/internal/identity"
+	"github.com/mildronize/my-token/internal/transport/publicapi"
 )
 
 // bffKeyNotFoundBody is the one 404 response body RevokeKey ever writes

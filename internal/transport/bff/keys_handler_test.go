@@ -9,10 +9,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/mildronize/my-template/internal/api"
-	"github.com/mildronize/my-template/internal/bffapi"
-	"github.com/mildronize/my-template/internal/identity"
-	"github.com/mildronize/my-template/internal/transport/publicapi"
+	"github.com/mildronize/my-token/internal/api"
+	"github.com/mildronize/my-token/internal/bffapi"
+	"github.com/mildronize/my-token/internal/identity"
+	"github.com/mildronize/my-token/internal/transport/publicapi"
 )
 
 // This file was rewritten wholesale for milestone-4/task-6 (I21), not

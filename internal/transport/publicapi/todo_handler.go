@@ -8,8 +8,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/mildronize/my-template/internal/api"
-	"github.com/mildronize/my-template/internal/domain/todo"
+	"github.com/mildronize/my-token/internal/api"
+	"github.com/mildronize/my-token/internal/domain/todo"
 )
 
 // TodoServer adapts todo.Service to internal/api's generated

@@ -9,7 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"golang.org/x/oauth2"
 
-	"github.com/mildronize/my-template/internal/platform"
+	"github.com/mildronize/my-token/internal/platform"
 )
 
 // randomState returns a fresh, unguessable CSRF state value — "standard

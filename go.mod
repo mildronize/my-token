@@ -1,4 +1,4 @@
-module github.com/mildronize/my-template
+module github.com/mildronize/my-token
 
 go 1.26.0
 

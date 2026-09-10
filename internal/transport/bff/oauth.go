@@ -5,7 +5,7 @@ import (
 
 	"golang.org/x/oauth2"
 
-	"github.com/mildronize/my-template/internal/platform"
+	"github.com/mildronize/my-token/internal/platform"
 )
 
 // oauthConfig builds the oauth2.Config login_handler.go and

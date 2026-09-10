@@ -26,12 +26,12 @@ import (
 	"github.com/pressly/goose/v3"
 	"github.com/stretchr/testify/require"
 
-	"github.com/mildronize/my-template/internal/bffapi"
-	"github.com/mildronize/my-template/internal/domain/todo"
-	"github.com/mildronize/my-template/internal/domain/usage"
-	"github.com/mildronize/my-template/internal/identity"
-	"github.com/mildronize/my-template/internal/platform"
-	"github.com/mildronize/my-template/internal/transport/publicapi"
+	"github.com/mildronize/my-token/internal/bffapi"
+	"github.com/mildronize/my-token/internal/domain/todo"
+	"github.com/mildronize/my-token/internal/domain/usage"
+	"github.com/mildronize/my-token/internal/identity"
+	"github.com/mildronize/my-token/internal/platform"
+	"github.com/mildronize/my-token/internal/transport/publicapi"
 
 	_ "modernc.org/sqlite" // registers the "sqlite" database/sql driver for these tests
 )

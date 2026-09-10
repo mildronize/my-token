@@ -29,15 +29,15 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/mildronize/my-template/internal/api"
-	"github.com/mildronize/my-template/internal/bffapi"
-	"github.com/mildronize/my-template/internal/domain/todo"
-	"github.com/mildronize/my-template/internal/domain/usage"
-	"github.com/mildronize/my-template/internal/identity"
-	"github.com/mildronize/my-template/internal/platform"
-	"github.com/mildronize/my-template/internal/transport/bff"
-	"github.com/mildronize/my-template/internal/transport/publicapi"
-	"github.com/mildronize/my-template/web"
+	"github.com/mildronize/my-token/internal/api"
+	"github.com/mildronize/my-token/internal/bffapi"
+	"github.com/mildronize/my-token/internal/domain/todo"
+	"github.com/mildronize/my-token/internal/domain/usage"
+	"github.com/mildronize/my-token/internal/identity"
+	"github.com/mildronize/my-token/internal/platform"
+	"github.com/mildronize/my-token/internal/transport/bff"
+	"github.com/mildronize/my-token/internal/transport/publicapi"
+	"github.com/mildronize/my-token/web"
 )
 
 func main() {

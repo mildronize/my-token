@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/mildronize/my-template/internal/dbquery"
+	"github.com/mildronize/my-token/internal/dbquery"
 )
 
 func sampleEvent(id string) Event {

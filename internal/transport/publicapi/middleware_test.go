@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/mildronize/my-template/internal/identity"
+	"github.com/mildronize/my-token/internal/identity"
 )
 
 // newMiddlewareTestRouter mirrors newIntegrationRouter/

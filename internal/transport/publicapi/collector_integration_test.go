@@ -14,8 +14,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/mildronize/my-template/internal/collector"
-	"github.com/mildronize/my-template/internal/domain/usage"
+	"github.com/mildronize/my-token/internal/collector"
+	"github.com/mildronize/my-token/internal/domain/usage"
 )
 
 // usageLine mirrors internal/collector's own test helper of the same

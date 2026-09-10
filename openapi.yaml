@@ -1,6 +1,6 @@
 openapi: 3.0.3
 info:
-  title: my-template API
+  title: my-token API
   version: "1.0.0"
   description: >
     The template's one REST surface (`_contract/API.md`). Every request

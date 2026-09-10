@@ -5,8 +5,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/mildronize/my-template/internal/api"
-	"github.com/mildronize/my-template/internal/domain/usage"
+	"github.com/mildronize/my-token/internal/api"
+	"github.com/mildronize/my-token/internal/domain/usage"
 )
 
 // UsageServer adapts usage.Service to internal/api's generated

@@ -8,7 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/mildronize/my-template/internal/db"
+	"github.com/mildronize/my-token/internal/db"
 )
 
 // ErrNotFound is returned by every Repo lookup when no row matches. Unlike
