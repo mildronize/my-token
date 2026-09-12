@@ -11,8 +11,8 @@ import (
 )
 
 const insertUsageEventIgnoreDuplicate = `-- name: InsertUsageEventIgnoreDuplicate :execrows
-INSERT OR IGNORE INTO usage_events (id, session_id, actor, path, machine, model, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, cost, source, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT OR IGNORE INTO usage_events (id, session_id, actor, path, machine, model, scan_root, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, cost, source, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertUsageEventIgnoreDuplicateParams struct {
@@ -22,6 +22,7 @@ type InsertUsageEventIgnoreDuplicateParams struct {
 	Path                     string    `json:"path"`
 	Machine                  string    `json:"machine"`
 	Model                    string    `json:"model"`
+	ScanRoot                 string    `json:"scan_root"`
 	InputTokens              int64     `json:"input_tokens"`
 	OutputTokens             int64     `json:"output_tokens"`
 	CacheReadInputTokens     int64     `json:"cache_read_input_tokens"`
@@ -31,6 +32,9 @@ type InsertUsageEventIgnoreDuplicateParams struct {
 	CreatedAt                time.Time `json:"created_at"`
 }
 
+// story-2/ticket-8 adds scan_root (the raw, resolved scan-root path the
+// reporting transcript file was found under -- distinct from `path`,
+// which is git-rooted from touched files).
 func (q *Queries) InsertUsageEventIgnoreDuplicate(ctx context.Context, arg InsertUsageEventIgnoreDuplicateParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, insertUsageEventIgnoreDuplicate,
 		arg.ID,
@@ -39,6 +43,7 @@ func (q *Queries) InsertUsageEventIgnoreDuplicate(ctx context.Context, arg Inser
 		arg.Path,
 		arg.Machine,
 		arg.Model,
+		arg.ScanRoot,
 		arg.InputTokens,
 		arg.OutputTokens,
 		arg.CacheReadInputTokens,
@@ -54,7 +59,7 @@ func (q *Queries) InsertUsageEventIgnoreDuplicate(ctx context.Context, arg Inser
 }
 
 const listUsageEventsInWindow = `-- name: ListUsageEventsInWindow :many
-SELECT id, session_id, actor, path, machine, model, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, cost, source, created_at
+SELECT id, session_id, actor, path, machine, model, scan_root, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, cost, source, created_at
 FROM usage_events
 WHERE created_at >= ?1 AND created_at < ?2
 `
@@ -64,21 +69,38 @@ type ListUsageEventsInWindowParams struct {
 	RangeEnd   time.Time `json:"range_end"`
 }
 
+type ListUsageEventsInWindowRow struct {
+	ID                       string    `json:"id"`
+	SessionID                string    `json:"session_id"`
+	Actor                    string    `json:"actor"`
+	Path                     string    `json:"path"`
+	Machine                  string    `json:"machine"`
+	Model                    string    `json:"model"`
+	ScanRoot                 string    `json:"scan_root"`
+	InputTokens              int64     `json:"input_tokens"`
+	OutputTokens             int64     `json:"output_tokens"`
+	CacheReadInputTokens     int64     `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int64     `json:"cache_creation_input_tokens"`
+	Cost                     float64   `json:"cost"`
+	Source                   string    `json:"source"`
+	CreatedAt                time.Time `json:"created_at"`
+}
+
 // story-1/ticket-14: every event whose created_at falls between the two
 // bound parameters below, range_start inclusive, range_end exclusive.
 // The raw rows behind the console's own read surface --
 // internal/domain/usage/summary.go's Aggregate does the group_by/window
 // math in Go, pure and unit-testable without sqlc/a real database; this
 // query's only job is the window filter itself.
-func (q *Queries) ListUsageEventsInWindow(ctx context.Context, arg ListUsageEventsInWindowParams) ([]UsageEvent, error) {
+func (q *Queries) ListUsageEventsInWindow(ctx context.Context, arg ListUsageEventsInWindowParams) ([]ListUsageEventsInWindowRow, error) {
 	rows, err := q.db.QueryContext(ctx, listUsageEventsInWindow, arg.RangeStart, arg.RangeEnd)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []UsageEvent
+	var items []ListUsageEventsInWindowRow
 	for rows.Next() {
-		var i UsageEvent
+		var i ListUsageEventsInWindowRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.SessionID,
@@ -86,6 +108,7 @@ func (q *Queries) ListUsageEventsInWindow(ctx context.Context, arg ListUsageEven
 			&i.Path,
 			&i.Machine,
 			&i.Model,
+			&i.ScanRoot,
 			&i.InputTokens,
 			&i.OutputTokens,
 			&i.CacheReadInputTokens,

@@ -12,13 +12,15 @@ import (
 // tests must never make a real HTTP call (client_test.go already covers
 // Client's own wire behavior against a real httptest.Server).
 type fakePoster struct {
-	posted []Event
-	result BatchResult
-	err    error
+	posted          []Event
+	postedScanRoots []ScanRootReport
+	result          BatchResult
+	err             error
 }
 
-func (f *fakePoster) PostBatch(events []Event) (BatchResult, error) {
+func (f *fakePoster) PostBatch(scanRoots []ScanRootReport, events []Event) (BatchResult, error) {
 	f.posted = append(f.posted, events...)
+	f.postedScanRoots = append(f.postedScanRoots, scanRoots...)
 	if f.err != nil {
 		return BatchResult{}, f.err
 	}
@@ -50,7 +52,7 @@ func TestRun_ScansExtractsAttributesAndPosts_ThenTracksSentState(t *testing.T) {
 	pathStorePath := filepath.Join(t.TempDir(), "pathstore.db")
 	poster := &fakePoster{}
 
-	cfg := Config{ScanPaths: []string{root}, InstallID: "install-abc"}
+	cfg := Config{ScanPaths: []ScanPath{{Name: "main", Path: root, SourceType: "claude_code"}}, InstallID: "install-abc"}
 	result, err := Run(cfg, statePath, pathStorePath, fakeResolver("/home/thw-home/gits/my-token"), "test-host", poster)
 	require.NoError(t, err)
 
@@ -68,6 +70,10 @@ func TestRun_ScansExtractsAttributesAndPosts_ThenTracksSentState(t *testing.T) {
 	assert.Equal(t, "/home/thw-home/gits/my-token", evt1.Path, "resolved via the injected git-root resolver")
 	assert.Equal(t, "install-abc", evt1.Machine)
 	assert.Equal(t, int64(100), evt1.InputTokens)
+	assert.Equal(t, root, evt1.ScanRoot, "story-2/ticket-8: ScanRoot is the configured ScanPath entry's own resolved Path, not the git-rooted `path`")
+
+	require.Len(t, poster.postedScanRoots, 1, "story-2/ticket-8: the batch's own deduped scan_roots array, one entry per distinct scan root actually used this run")
+	assert.Equal(t, ScanRootReport{Path: root, Name: "main", SourceType: "claude_code"}, poster.postedScanRoots[0])
 
 	// A second run with the same fixture must find nothing new to send —
 	// the local sent-state file already has both message.ids.
@@ -76,6 +82,49 @@ func TestRun_ScansExtractsAttributesAndPosts_ThenTracksSentState(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, result2.NewRowsFound)
 	assert.Empty(t, poster2.posted)
+}
+
+// TestRun_TwoScanPathEntries_EventsAttributedToTheRightScanRoot is
+// story-2/ticket-8's own required unit test: a fixture scan across two
+// configured ScanPath entries correctly attributes each found
+// transcript's events to the right ScanRoot value (and carries that
+// entry's own Name/SourceType through to the batch's scan_roots array),
+// not just whichever root happened to be scanned first.
+func TestRun_TwoScanPathEntries_EventsAttributedToTheRightScanRoot(t *testing.T) {
+	rootMain := t.TempDir()
+	rootBackup := t.TempDir()
+	writeFile(t, filepath.Join(rootMain, "session-main.jsonl"),
+		usageLine("r1", "msg_main", "claude-sonnet-4-5", "text", 10, 5, 0, 0, "/home/thw-home/.typ-crews/freya", "session-main", "2026-09-10T12:00:00Z")+"\n")
+	writeFile(t, filepath.Join(rootBackup, "session-backup.jsonl"),
+		usageLine("r1", "msg_backup", "claude-sonnet-4-5", "text", 20, 10, 0, 0, "/home/thw-home/.typ-crews/freya", "session-backup", "2026-09-10T12:00:00Z")+"\n")
+
+	poster := &fakePoster{}
+	cfg := Config{
+		ScanPaths: []ScanPath{
+			{Name: "main", Path: rootMain, SourceType: "claude_code"},
+			{Name: "backup-install", Path: rootBackup, SourceType: "claude_code"},
+		},
+		InstallID: "install-abc",
+	}
+	result, err := Run(cfg, filepath.Join(t.TempDir(), "state.json"), filepath.Join(t.TempDir(), "pathstore.db"), fakeResolver(""), "test-host", poster)
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.NewRowsFound)
+	require.Len(t, poster.posted, 2)
+
+	byID := map[string]Event{}
+	for _, e := range poster.posted {
+		byID[e.ID] = e
+	}
+	assert.Equal(t, rootMain, byID["msg_main"].ScanRoot, "msg_main's transcript was found under rootMain")
+	assert.Equal(t, rootBackup, byID["msg_backup"].ScanRoot, "msg_backup's transcript was found under rootBackup")
+
+	require.Len(t, poster.postedScanRoots, 2, "both configured scan roots produced an event this run")
+	byPath := map[string]ScanRootReport{}
+	for _, r := range poster.postedScanRoots {
+		byPath[r.Path] = r
+	}
+	assert.Equal(t, ScanRootReport{Path: rootMain, Name: "main", SourceType: "claude_code"}, byPath[rootMain])
+	assert.Equal(t, ScanRootReport{Path: rootBackup, Name: "backup-install", SourceType: "claude_code"}, byPath[rootBackup])
 }
 
 // TestRun_ActorUnknownFallsBackToUnknownMarker: story-2/ticket-7 removes
@@ -90,7 +139,7 @@ func TestRun_ActorUnknownFallsBackToUnknownMarker(t *testing.T) {
 		usageLine("r1", "msg_1", "claude-sonnet-4-5", "text", 10, 5, 0, 0, "", "session-1", "2026-09-10T12:00:00Z")+"\n")
 
 	poster := &fakePoster{}
-	cfg := Config{ScanPaths: []string{root}, InstallID: "install-abc"}
+	cfg := Config{ScanPaths: []ScanPath{{Name: "main", Path: root, SourceType: "claude_code"}}, InstallID: "install-abc"}
 	_, err := Run(cfg, filepath.Join(t.TempDir(), "state.json"), filepath.Join(t.TempDir(), "pathstore.db"), fakeResolver("/home/thw-home/gits/some-repo"), "test-host", poster)
 	require.NoError(t, err)
 	require.Len(t, poster.posted, 1)
@@ -103,7 +152,7 @@ func TestRun_NotAGitRepoFallsBackToRawCwdForPath(t *testing.T) {
 		usageLine("r1", "msg_1", "claude-sonnet-4-5", "text", 10, 5, 0, 0, "/home/thw-home/.typ-crews/freya", "session-1", "2026-09-10T12:00:00Z")+"\n")
 
 	poster := &fakePoster{}
-	cfg := Config{ScanPaths: []string{root}, InstallID: "install-abc"}
+	cfg := Config{ScanPaths: []ScanPath{{Name: "main", Path: root, SourceType: "claude_code"}}, InstallID: "install-abc"}
 	_, err := Run(cfg, filepath.Join(t.TempDir(), "state.json"), filepath.Join(t.TempDir(), "pathstore.db"), fakeResolver(""), "test-host", poster)
 	require.NoError(t, err)
 	require.Len(t, poster.posted, 1)
@@ -132,7 +181,7 @@ func TestRun_TouchedPathsMajorityVoteBeatsSessionCwd(t *testing.T) {
 		toolUseLine(t, sessionID, "Bash", map[string]any{"command": "cd /home/thw-home/gits/my-template && git commit -m \"work\""})+"\n")
 
 	poster := &fakePoster{}
-	cfg := Config{ScanPaths: []string{root}, InstallID: "install-abc"}
+	cfg := Config{ScanPaths: []ScanPath{{Name: "main", Path: root, SourceType: "claude_code"}}, InstallID: "install-abc"}
 	resolver := fakeGitRootResolver(map[string]string{
 		"/home/thw-home/gits/my-template": "/home/thw-home/gits/my-template",
 	})
@@ -170,7 +219,7 @@ func TestRun_MultipleCrewHomesUnderOneScanRoot_AllFoundAndDistinctlyAttributed(t
 	}
 
 	poster := &fakePoster{}
-	cfg := Config{ScanPaths: []string{root}, InstallID: "install-abc"}
+	cfg := Config{ScanPaths: []ScanPath{{Name: "main", Path: root, SourceType: "claude_code"}}, InstallID: "install-abc"}
 	result, err := Run(cfg, filepath.Join(t.TempDir(), "state.json"), filepath.Join(t.TempDir(), "pathstore.db"), fakeResolver(""), "test-host", poster)
 	require.NoError(t, err)
 

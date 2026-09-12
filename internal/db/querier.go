@@ -18,6 +18,9 @@ type Querier interface {
 	GetUserByHandle(ctx context.Context, handle string) (User, error)
 	GetUserByID(ctx context.Context, id string) (User, error)
 	GetUserBySSOSubject(ctx context.Context, ssoSubject sql.NullString) (User, error)
+	// story-2/ticket-8 adds scan_root (the raw, resolved scan-root path the
+	// reporting transcript file was found under -- distinct from `path`,
+	// which is git-rooted from touched files).
 	InsertUsageEventIgnoreDuplicate(ctx context.Context, arg InsertUsageEventIgnoreDuplicateParams) (int64, error)
 	ListAPIKeysByOwner(ctx context.Context, userID string) ([]ApiKey, error)
 	// Every active user, either role -- the assignee-picker's own source
@@ -63,7 +66,7 @@ type Querier interface {
 	// internal/domain/usage/summary.go's Aggregate does the group_by/window
 	// math in Go, pure and unit-testable without sqlc/a real database; this
 	// query's only job is the window filter itself.
-	ListUsageEventsInWindow(ctx context.Context, arg ListUsageEventsInWindowParams) ([]UsageEvent, error)
+	ListUsageEventsInWindow(ctx context.Context, arg ListUsageEventsInWindowParams) ([]ListUsageEventsInWindowRow, error)
 	RevokeAPIKey(ctx context.Context, arg RevokeAPIKeyParams) (ApiKey, error)
 	// The owner-facing revoke endpoint's own query (I21): session-gated to a
 	// valid owner by the handler above this layer, but not scoped to any
@@ -100,6 +103,26 @@ type Querier interface {
 	// comment has the full history). No em dashes, no Thai, no "section" /
 	// other non-ASCII punctuation in this file.
 	UpsertMachine(ctx context.Context, arg UpsertMachineParams) error
+	// story-2/ticket-8: the reporting collector's own (install_id,
+	// scan_root_path) pair, refreshed on every ingestion batch
+	// (internal/domain/usage/service.go's UpsertScanRoots, called from
+	// internal/transport/publicapi/usage_handler.go's
+	// IngestUsageEventsBatch) so a renamed scan root's console label catches
+	// up rather than staying stuck on whatever name it was first seen with
+	// (contract's Data model: `scan_roots`). INSERT OR REPLACE, same idiom
+	// machines.sql already uses -- not "ON CONFLICT(...) DO UPDATE SET ...",
+	// which false-positives internal/dbquery/tableisolation.go's table
+	// scanner (it reads the SET clause's target list as if it named a table
+	// called "set"; see machines.sql's own header for the full explanation).
+	// INSERT OR REPLACE has no such clause and remains functionally
+	// equivalent here since every column is supplied on every call.
+	//
+	// Note: this file must stay plain ASCII -- bin/sqlc v1.31.1 corrupts its
+	// own star-expansion byte offsets on any non-ASCII byte in a
+	// db/queries/*.sql file (internal/db_queries_ascii_test.go's own doc
+	// comment has the full history). No em dashes, no Thai, no "section" /
+	// other non-ASCII punctuation in this file.
+	UpsertScanRoot(ctx context.Context, arg UpsertScanRootParams) error
 }
 
 var _ Querier = (*Queries)(nil)

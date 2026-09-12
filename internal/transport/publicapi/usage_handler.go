@@ -38,6 +38,7 @@ func toIngestEvent(e api.UsageEventInput) usage.IngestEvent {
 		Path:                     e.Path,
 		Machine:                  e.Machine,
 		Model:                    e.Model,
+		ScanRoot:                 e.ScanRoot,
 		InputTokens:              e.InputTokens,
 		OutputTokens:             e.OutputTokens,
 		CacheReadInputTokens:     e.CacheReadInputTokens,
@@ -85,6 +86,18 @@ func (s *UsageServer) IngestUsageEventsBatch(c *gin.Context) {
 	}
 
 	if err := s.Service.UpsertMachine(c.Request.Context(), req.InstallId, req.Hostname, time.Now()); err != nil {
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
+
+	// story-2/ticket-8: the batch's own scan_roots array is upserted into
+	// scan_roots the same way install_id/hostname are already upserted
+	// into machines above — once per batch, not once per event.
+	scanRoots := make([]usage.UpsertScanRootInput, 0, len(req.ScanRoots))
+	for _, sr := range req.ScanRoots {
+		scanRoots = append(scanRoots, usage.UpsertScanRootInput{Path: sr.Path, Name: sr.Name, SourceType: sr.SourceType})
+	}
+	if err := s.Service.UpsertScanRoots(c.Request.Context(), req.InstallId, scanRoots, time.Now()); err != nil {
 		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}

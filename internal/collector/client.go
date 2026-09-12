@@ -15,12 +15,17 @@ import (
 // computes and stores both itself and rejects a client that tries to
 // send either (additionalProperties: false).
 type Event struct {
-	ID                       string    `json:"id"`
-	SessionID                string    `json:"session_id"`
-	Actor                    string    `json:"actor"`
-	Path                     string    `json:"path"`
-	Machine                  string    `json:"machine"`
-	Model                    string    `json:"model"`
+	ID        string `json:"id"`
+	SessionID string `json:"session_id"`
+	Actor     string `json:"actor"`
+	Path      string `json:"path"`
+	Machine   string `json:"machine"`
+	Model     string `json:"model"`
+	// ScanRoot is the resolved ScanPath.Path this event's transcript file
+	// was found under (story-2/ticket-8, contract's Data model:
+	// usage_events.scan_root) — distinct from Path, which is git-rooted
+	// from touched files, not the transcript's own location.
+	ScanRoot                 string    `json:"scan_root"`
 	InputTokens              int64     `json:"input_tokens"`
 	OutputTokens             int64     `json:"output_tokens"`
 	CacheReadInputTokens     int64     `json:"cache_read_input_tokens"`
@@ -28,12 +33,26 @@ type Event struct {
 	Timestamp                time.Time `json:"timestamp"`
 }
 
+// ScanRootReport is one entry of the batch's top-level scan_roots array
+// (story-2/ticket-8, contract's API surface: "scan_roots: [{path, name,
+// source_type}] — NEW — batch-level, upserted like hostname already
+// is"). Path is the same resolved value as the events' own ScanRoot
+// field; Name/SourceType are the owning ScanPath config entry's own
+// declared values.
+type ScanRootReport struct {
+	Path       string `json:"path"`
+	Name       string `json:"name"`
+	SourceType string `json:"source_type"`
+}
+
 // batchRequest is POST /api/v1/usage-events/batch's request body
-// (contract's API surface: "{ install_id, hostname, events: [...] }").
+// (contract's API surface: "{ install_id, hostname, scan_roots: [...],
+// events: [...] }" — scan_roots added story-2/ticket-8).
 type batchRequest struct {
-	InstallID string  `json:"install_id"`
-	Hostname  string  `json:"hostname"`
-	Events    []Event `json:"events"`
+	InstallID string           `json:"install_id"`
+	Hostname  string           `json:"hostname"`
+	ScanRoots []ScanRootReport `json:"scan_roots"`
+	Events    []Event          `json:"events"`
 }
 
 // BatchResult is the endpoint's response shape (ticket 11's report:
@@ -70,12 +89,13 @@ func NewClient(coreURL, apiKey, installID, hostname string) *Client {
 	}
 }
 
-// PostBatch POSTs events to /api/v1/usage-events/batch. A nil/empty
+// PostBatch POSTs events (and the scan_roots array they were attributed
+// to, story-2/ticket-8) to /api/v1/usage-events/batch. A nil/empty
 // events slice is a no-op (returns a zero BatchResult, makes no HTTP
 // request at all) — collector.go already filters to newly-found rows
 // before calling this, so an empty batch means "nothing new to report",
 // not an error condition.
-func (c *Client) PostBatch(events []Event) (BatchResult, error) {
+func (c *Client) PostBatch(scanRoots []ScanRootReport, events []Event) (BatchResult, error) {
 	if len(events) == 0 {
 		return BatchResult{}, nil
 	}
@@ -83,6 +103,7 @@ func (c *Client) PostBatch(events []Event) (BatchResult, error) {
 	body, err := json.Marshal(batchRequest{
 		InstallID: c.installID,
 		Hostname:  c.hostname,
+		ScanRoots: scanRoots,
 		Events:    events,
 	})
 	if err != nil {
