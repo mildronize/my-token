@@ -1,6 +1,9 @@
 package collector
 
-import "fmt"
+import (
+	"fmt"
+	"sort"
+)
 
 // unknownActor is the fallback used when a session's cwd doesn't match
 // the `.typ-crews/<name>` pattern at all — mirrors the contract's
@@ -12,9 +15,11 @@ const unknownActor = "(unknown)"
 // BatchPoster is the subset of *Client's behavior Run depends on — an
 // interface so collector_test.go's unit tests can inject a fake instead
 // of a real HTTP round trip (client_test.go already covers *Client's own
-// wire behavior against a real httptest.Server).
+// wire behavior against a real httptest.Server). scanRoots is the
+// batch's own deduped scan_roots array (story-2/ticket-8), reported
+// alongside events the same way install_id/hostname already are.
 type BatchPoster interface {
-	PostBatch(events []Event) (BatchResult, error)
+	PostBatch(scanRoots []ScanRootReport, events []Event) (BatchResult, error)
 }
 
 // RunResult summarizes one collector run, for the CLI to print and for
@@ -40,8 +45,9 @@ type RunResult struct {
 //  4. resolve each row's `actor` from that same cwd (actor.go) — ticket
 //     13 does not change actor derivation, only path
 //  5. drop rows this install has already successfully sent (state.go)
-//  6. POST the remainder as one batch to poster, then mark them sent and
-//     persist statePath — only after a successful POST, so a failed
+//  6. POST the remainder as one batch (plus this batch's own deduped
+//     scan_roots array, story-2/ticket-8) to poster, then mark them sent
+//     and persist statePath — only after a successful POST, so a failed
 //     send is retried on the next run rather than silently lost
 //
 // gitRootResolver and poster are both injected (not hardcoded to
@@ -63,8 +69,18 @@ func Run(cfg Config, statePath string, pathStorePath string, gitRootResolver Git
 
 	var allRows []UsageRow
 	seenMessageIDs := make(map[string]bool)
+	// scanRootByMessageID tracks which ScannedFile (and therefore which
+	// configured ScanPath entry) each message.id was discovered under
+	// (story-2/ticket-8) — the loop below already walks each configured
+	// root separately (scan.go's FindTranscriptFiles), so this is wiring,
+	// not new discovery logic. Set only at first-seen time, same gate as
+	// allRows' own dedup, so a message.id that (in principle) appears in
+	// more than one scanned file is attributed to whichever one is seen
+	// first, consistently with every other first-seen-wins fact this
+	// function derives.
+	scanRootByMessageID := make(map[string]ScannedFile)
 	for _, f := range files {
-		rows, err := ExtractUsageRowsFromFile(f)
+		rows, err := ExtractUsageRowsFromFile(f.Path)
 		if err != nil {
 			return result, err
 		}
@@ -73,6 +89,7 @@ func Run(cfg Config, statePath string, pathStorePath string, gitRootResolver Git
 				continue // the same message.id can appear in more than one scanned file in principle — dedupe globally, not per-file
 			}
 			seenMessageIDs[r.MessageID] = true
+			scanRootByMessageID[r.MessageID] = f
 			allRows = append(allRows, r)
 		}
 	}
@@ -91,7 +108,11 @@ func Run(cfg Config, statePath string, pathStorePath string, gitRootResolver Git
 	}
 	defer pathStore.Close()
 
-	pathBySession, err := scanSessionPaths(files, allRows, pathStore, gitRootResolver)
+	filePaths := make([]string, len(files))
+	for i, f := range files {
+		filePaths[i] = f.Path
+	}
+	pathBySession, err := scanSessionPaths(filePaths, allRows, pathStore, gitRootResolver)
 	if err != nil {
 		return result, err
 	}
@@ -114,8 +135,15 @@ func Run(cfg Config, statePath string, pathStorePath string, gitRootResolver Git
 	}
 
 	events := make([]Event, 0, len(newRows))
+	// scanRootReportsByPath dedups this batch's own scan_roots array
+	// (story-2/ticket-8, contract's API surface: "scan_roots ... upserted
+	// ... once per batch, not once per event") from the events actually
+	// being sent this run — keyed by the resolved scan-root path, which
+	// is also scan_roots' own composite-PK column alongside install_id.
+	scanRootReportsByPath := make(map[string]ScanRootReport)
 	for _, r := range newRows {
 		path, actor := pathBySession[r.SessionID], actorForSession(r.SessionID)
+		sf := scanRootByMessageID[r.MessageID]
 		events = append(events, Event{
 			ID:                       r.MessageID,
 			SessionID:                r.SessionID,
@@ -123,12 +151,14 @@ func Run(cfg Config, statePath string, pathStorePath string, gitRootResolver Git
 			Path:                     path,
 			Machine:                  cfg.InstallID,
 			Model:                    r.Model,
+			ScanRoot:                 sf.ScanRoot,
 			InputTokens:              r.InputTokens,
 			OutputTokens:             r.OutputTokens,
 			CacheReadInputTokens:     r.CacheReadInputTokens,
 			CacheCreationInputTokens: r.CacheCreationInputTokens,
 			Timestamp:                r.Timestamp,
 		})
+		scanRootReportsByPath[sf.ScanRoot] = ScanRootReport{Path: sf.ScanRoot, Name: sf.Name, SourceType: sf.SourceType}
 		result.EstimatedCostUS += CostForUsage(r.Model, r.InputTokens, r.OutputTokens, r.CacheReadInputTokens, r.CacheCreationInputTokens)
 	}
 
@@ -136,7 +166,15 @@ func Run(cfg Config, statePath string, pathStorePath string, gitRootResolver Git
 		return result, nil
 	}
 
-	batchResult, err := poster.PostBatch(events)
+	scanRoots := make([]ScanRootReport, 0, len(scanRootReportsByPath))
+	for _, rep := range scanRootReportsByPath {
+		scanRoots = append(scanRoots, rep)
+	}
+	// Deterministic order — map iteration order is random in Go, and
+	// this batch's own wire array otherwise has no natural ordering.
+	sort.Slice(scanRoots, func(i, j int) bool { return scanRoots[i].Path < scanRoots[j].Path })
+
+	batchResult, err := poster.PostBatch(scanRoots, events)
 	if err != nil {
 		// Nothing marked sent, nothing saved — every one of these rows is
 		// retried on the next run, exactly as if this run never happened.

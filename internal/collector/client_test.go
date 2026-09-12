@@ -32,14 +32,16 @@ func TestClient_PostBatch_SendsBearerAuthAndCorrectBody(t *testing.T) {
 		Path:                     "/home/thw-home/gits/my-token",
 		Machine:                  "install-123",
 		Model:                    "claude-sonnet-4-5",
+		ScanRoot:                 "/home/thw-home/.claude",
 		InputTokens:              10,
 		OutputTokens:             20,
 		CacheReadInputTokens:     0,
 		CacheCreationInputTokens: 0,
 		Timestamp:                time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC),
 	}}
+	scanRoots := []ScanRootReport{{Path: "/home/thw-home/.claude", Name: "main", SourceType: "claude_code"}}
 
-	result, err := client.PostBatch(events)
+	result, err := client.PostBatch(scanRoots, events)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), result.Received)
 	assert.Equal(t, int64(1), result.Inserted)
@@ -53,6 +55,15 @@ func TestClient_PostBatch_SendsBearerAuthAndCorrectBody(t *testing.T) {
 	evt := gotEvents[0].(map[string]any)
 	assert.Equal(t, "msg_1", evt["id"])
 	assert.Equal(t, "freya", evt["actor"])
+	assert.Equal(t, "/home/thw-home/.claude", evt["scan_root"], "story-2/ticket-8: each event carries its own scan_root")
+
+	gotScanRoots, ok := gotBody["scan_roots"].([]any)
+	require.True(t, ok, "story-2/ticket-8: the batch's top-level scan_roots array")
+	require.Len(t, gotScanRoots, 1)
+	sr := gotScanRoots[0].(map[string]any)
+	assert.Equal(t, "/home/thw-home/.claude", sr["path"])
+	assert.Equal(t, "main", sr["name"])
+	assert.Equal(t, "claude_code", sr["source_type"])
 }
 
 func TestClient_PostBatch_EmptyBatchIsNoOp(t *testing.T) {
@@ -63,7 +74,7 @@ func TestClient_PostBatch_EmptyBatchIsNoOp(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(server.URL, "tpl_test_key", "install-123", "test-host")
-	result, err := client.PostBatch(nil)
+	result, err := client.PostBatch(nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), result.Received)
 	assert.False(t, called, "an empty batch should not make a request at all")
@@ -76,6 +87,6 @@ func TestClient_PostBatch_NonSuccessStatusIsAnError(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(server.URL, "bad-key", "install-123", "test-host")
-	_, err := client.PostBatch([]Event{{ID: "msg_1"}})
+	_, err := client.PostBatch(nil, []Event{{ID: "msg_1"}})
 	assert.Error(t, err)
 }

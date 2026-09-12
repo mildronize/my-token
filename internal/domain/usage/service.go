@@ -19,12 +19,17 @@ const Source = "claude_code"
 // the client for either, so there is no field here a caller could set
 // them through even if the transport layer forwarded one.
 type IngestEvent struct {
-	ID                       string
-	SessionID                string
-	Actor                    string
-	Path                     string
-	Machine                  string
-	Model                    string
+	ID        string
+	SessionID string
+	Actor     string
+	Path      string
+	Machine   string
+	Model     string
+	// ScanRoot is the raw, resolved scan-root path the reporting
+	// transcript file was found under (story-2/ticket-8, contract's Data
+	// model) — distinct from Path, which is git-rooted from touched
+	// files, not the transcript's own location.
+	ScanRoot                 string
 	InputTokens              int64
 	OutputTokens             int64
 	CacheReadInputTokens     int64
@@ -76,6 +81,7 @@ func (s *Service) IngestBatch(ctx context.Context, events []IngestEvent) (receiv
 			Path:                     e.Path,
 			Machine:                  e.Machine,
 			Model:                    e.Model,
+			ScanRoot:                 e.ScanRoot,
 			InputTokens:              e.InputTokens,
 			OutputTokens:             e.OutputTokens,
 			CacheReadInputTokens:     e.CacheReadInputTokens,
@@ -161,6 +167,38 @@ func (s *Service) substituteMachineHostnames(ctx context.Context, breakdown []Br
 // original design", usage_events.machine itself is untouched).
 func (s *Service) UpsertMachine(ctx context.Context, installID, hostname string, now time.Time) error {
 	return s.Repo.UpsertMachine(ctx, installID, hostname, now)
+}
+
+// UpsertScanRootInput is Service.UpsertScanRoots' own per-entry input
+// shape, mirroring the batch's own scan_roots wire array (story-2/
+// ticket-8, contract's API surface: "scan_roots: [{path, name,
+// source_type}]"). Named UpsertScanRootInput, not the wire type's own
+// ScanRootInput (api.ScanRootInput, internal/api/openapi.gen.go) —
+// distinct names at each layer, the same convention the sibling event
+// flow already follows (api.UsageEventInput -> usage.IngestEvent ->
+// usage.Event), so a reader/grep never has to guess which package's type
+// is meant.
+type UpsertScanRootInput struct {
+	Path       string
+	Name       string
+	SourceType string
+}
+
+// UpsertScanRoots upserts every entry of one ingestion batch's own
+// scan_roots array into the scan_roots table, refreshing last_seen_at to
+// now for each — story-2/ticket-8: called on every POST
+// /api/v1/usage-events/batch (internal/transport/publicapi/
+// usage_handler.go's IngestUsageEventsBatch), additive to IngestBatch,
+// not a replacement for it, mirroring UpsertMachine above exactly except
+// for handling a whole array (scan_roots is batch-level but can name
+// more than one root, unlike hostname).
+func (s *Service) UpsertScanRoots(ctx context.Context, installID string, scanRoots []UpsertScanRootInput, now time.Time) error {
+	for _, sr := range scanRoots {
+		if err := s.Repo.UpsertScanRoot(ctx, installID, sr.Path, sr.Name, sr.SourceType, now); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // WindowTotals is one row of GET /api/bff/usage/windows' fixed table —

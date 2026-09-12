@@ -163,6 +163,7 @@ components:
           path,
           machine,
           model,
+          scan_root,
           input_tokens,
           output_tokens,
           cache_read_input_tokens,
@@ -194,6 +195,14 @@ components:
           description: The reporting collector's own install_id (UUID).
         model:
           type: string
+        scan_root:
+          type: string
+          description: >
+            story-2/ticket-8 — the raw, resolved scan-root path (the
+            collector's own configured ScanPath.Path, after expandHome)
+            the reporting transcript file was found under. Distinct from
+            `path`, which is git-rooted from touched files (ticket 13),
+            not the transcript's own location.
         input_tokens:
           type: integer
           format: int64
@@ -215,15 +224,52 @@ components:
             client-supplied (unlike `cost`/`source`): the collector
             reports usage after the fact, sometimes with a real delay, so
             "when this was ingested" would be the wrong value here.
+    ScanRootInput:
+      type: object
+      additionalProperties: false
+      description: >
+        story-2/ticket-8 — one entry of the batch's own scan_roots array,
+        upserted into the `scan_roots` table the same way `install_id`/
+        `hostname` are already upserted into `machines` — once per batch,
+        not once per event.
+      required: [path, name, source_type]
+      properties:
+        path:
+          type: string
+          description: >
+            The scan root's own resolved path (the collector's configured
+            ScanPath.Path, after expandHome) — the same value each of
+            this batch's events carries in its own `scan_root` field.
+        name:
+          type: string
+          description: >
+            The operator-assigned label for this scan root (e.g. "main")
+            — per-install, no shared/global naming registry across
+            machines.
+        source_type:
+          type: string
+          description: >
+            A declared category at config time (defaults to
+            "claude_code" if the collector's own config omitted it) —
+            distinct from each event's own `source` (a fixed, server-
+            stamped fact), kept as two differently-named concepts on
+            purpose.
     IngestUsageEventsBatchRequest:
       type: object
       additionalProperties: false
-      required: [install_id, hostname, events]
+      required: [install_id, hostname, scan_roots, events]
       properties:
         install_id:
           type: string
         hostname:
           type: string
+        scan_roots:
+          type: array
+          description: >
+            story-2/ticket-8 — every scan root this batch's events were
+            attributed to, upserted into `scan_roots` once per batch.
+          items:
+            $ref: "#/components/schemas/ScanRootInput"
         events:
           type: array
           items:

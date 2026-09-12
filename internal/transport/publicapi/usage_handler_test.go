@@ -42,11 +42,22 @@ func usageEventBody(id string) map[string]any {
 		"path":                        "my-token",
 		"machine":                     "install-1",
 		"model":                       "claude-sonnet-4-5-20250929",
+		"scan_root":                   "/home/thw-home/.claude",
 		"input_tokens":                100,
 		"output_tokens":               50,
 		"cache_read_input_tokens":     10,
 		"cache_creation_input_tokens": 5,
 		"timestamp":                   "2026-09-10T12:00:00Z",
+	}
+}
+
+// defaultScanRootsBody is the scan_roots array every usageEventBody's own
+// "/home/thw-home/.claude" scan_root pairs with, for the tests in this
+// file that don't specifically exercise scan_roots upsert behavior
+// (those get their own bodies, below).
+func defaultScanRootsBody() []map[string]any {
+	return []map[string]any{
+		{"path": "/home/thw-home/.claude", "name": "main", "source_type": "claude_code"},
 	}
 }
 
@@ -61,6 +72,7 @@ func TestHandler_IngestUsageEventsBatch_DuplicateIDLandsExactlyOnce(t *testing.T
 	rec := doJSONRequest(t, router, http.MethodPost, "/api/v1/usage-events/batch", rawKey, map[string]any{
 		"install_id": "install-1",
 		"hostname":   "thw-home",
+		"scan_roots": defaultScanRootsBody(),
 		"events": []map[string]any{
 			usageEventBody("msg-1"),
 			usageEventBody("msg-2"),
@@ -86,6 +98,7 @@ func TestHandler_IngestUsageEventsBatch_ResendAcrossCalls_ChangesNothing(t *test
 	body := map[string]any{
 		"install_id": "install-1",
 		"hostname":   "thw-home",
+		"scan_roots": defaultScanRootsBody(),
 		"events":     []map[string]any{usageEventBody("msg-1"), usageEventBody("msg-2")},
 	}
 
@@ -121,6 +134,7 @@ func TestHandler_IngestUsageEventsBatch_CostAndSourceAreServerComputed(t *testin
 	rec := doJSONRequest(t, router, http.MethodPost, "/api/v1/usage-events/batch", rawKey, map[string]any{
 		"install_id": "install-1",
 		"hostname":   "thw-home",
+		"scan_roots": defaultScanRootsBody(),
 		"events":     []map[string]any{usageEventBody("msg-1")},
 	})
 	require.Equal(t, http.StatusCreated, rec.Code)
@@ -143,6 +157,7 @@ func TestHandler_IngestUsageEventsBatch_CostAndSourceAreServerComputed(t *testin
 	badRec := doJSONRequest(t, router, http.MethodPost, "/api/v1/usage-events/batch", rawKey, map[string]any{
 		"install_id": "install-1",
 		"hostname":   "thw-home",
+		"scan_roots": defaultScanRootsBody(),
 		"events":     []map[string]any{withClientValues},
 	})
 	assert.Equal(t, http.StatusBadRequest, badRec.Code)
@@ -155,6 +170,7 @@ func TestHandler_IngestUsageEventsBatch_Unauthenticated_Returns401(t *testing.T)
 	rec := doJSONRequest(t, router, http.MethodPost, "/api/v1/usage-events/batch", "", map[string]any{
 		"install_id": "install-1",
 		"hostname":   "thw-home",
+		"scan_roots": defaultScanRootsBody(),
 		"events":     []map[string]any{usageEventBody("msg-1")},
 	})
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
@@ -183,6 +199,7 @@ func TestHandler_IngestUsageEventsBatch_UpsertsMachine(t *testing.T) {
 	rec := doJSONRequest(t, router, http.MethodPost, "/api/v1/usage-events/batch", rawKey, map[string]any{
 		"install_id": "install-1",
 		"hostname":   "thw-home",
+		"scan_roots": defaultScanRootsBody(),
 		"events":     []map[string]any{usageEventBody("msg-1")},
 	})
 	require.Equal(t, http.StatusCreated, rec.Code)
@@ -215,6 +232,7 @@ func TestHandler_IngestUsageEventsBatch_SecondBatchWithChangedHostname_UpdatesMa
 	first := doJSONRequest(t, router, http.MethodPost, "/api/v1/usage-events/batch", rawKey, map[string]any{
 		"install_id": "install-1",
 		"hostname":   "old-hostname",
+		"scan_roots": defaultScanRootsBody(),
 		"events":     []map[string]any{usageEventBody("msg-1")},
 	})
 	require.Equal(t, http.StatusCreated, first.Code)
@@ -223,6 +241,7 @@ func TestHandler_IngestUsageEventsBatch_SecondBatchWithChangedHostname_UpdatesMa
 	second := doJSONRequest(t, router, http.MethodPost, "/api/v1/usage-events/batch", rawKey, map[string]any{
 		"install_id": "install-1",
 		"hostname":   "new-hostname",
+		"scan_roots": defaultScanRootsBody(),
 		"events":     []map[string]any{msg2},
 	})
 	require.Equal(t, http.StatusCreated, second.Code)
@@ -231,6 +250,92 @@ func TestHandler_IngestUsageEventsBatch_SecondBatchWithChangedHostname_UpdatesMa
 	var gotHostname string
 	require.NoError(t, conn.QueryRow(`SELECT hostname FROM machines WHERE install_id = ?`, "install-1").Scan(&gotHostname))
 	assert.Equal(t, "new-hostname", gotHostname, "the stored hostname must be the changed one, not the first-seen one")
+}
+
+// --- scan_roots: (install_id, scan_root_path) upserted on every batch
+// (story-2/ticket-8) --------------------------------------------------
+
+// countScanRootRows returns scan_roots' current row count.
+func countScanRootRows(t *testing.T, conn *sql.DB) int {
+	t.Helper()
+	var n int
+	require.NoError(t, conn.QueryRow(`SELECT COUNT(*) FROM scan_roots`).Scan(&n))
+	return n
+}
+
+// TestHandler_IngestUsageEventsBatch_UpsertsScanRoots is this ticket's
+// own core acceptance criterion for the write side: a batch's top-level
+// scan_roots array lands in the scan_roots table, additive to the usual
+// usage_events insert, and each event's own scan_root column persists
+// alongside it — distinct from `path`.
+func TestHandler_IngestUsageEventsBatch_UpsertsScanRoots(t *testing.T) {
+	router, conn := newIntegrationRouter(t)
+	_, rawKey := createAgentWithKey(t, conn, "collector-1")
+
+	rec := doJSONRequest(t, router, http.MethodPost, "/api/v1/usage-events/batch", rawKey, map[string]any{
+		"install_id": "install-1",
+		"hostname":   "thw-home",
+		"scan_roots": []map[string]any{
+			{"path": "/home/thw-home/.claude", "name": "main", "source_type": "claude_code"},
+		},
+		"events": []map[string]any{usageEventBody("msg-1")},
+	})
+	require.Equal(t, http.StatusCreated, rec.Code)
+
+	assert.Equal(t, 1, countScanRootRows(t, conn))
+	var gotName, gotSourceType string
+	require.NoError(t, conn.QueryRow(
+		`SELECT name, source_type FROM scan_roots WHERE install_id = ? AND scan_root_path = ?`,
+		"install-1", "/home/thw-home/.claude",
+	).Scan(&gotName, &gotSourceType))
+	assert.Equal(t, "main", gotName)
+	assert.Equal(t, "claude_code", gotSourceType)
+
+	// usage_events.scan_root persists alongside path/actor/etc, distinct
+	// from `path` (git-rooted from touched files, unaffected by this
+	// ticket).
+	var gotScanRoot string
+	require.NoError(t, conn.QueryRow(`SELECT scan_root FROM usage_events WHERE id = ?`, "msg-1").Scan(&gotScanRoot))
+	assert.Equal(t, "/home/thw-home/.claude", gotScanRoot)
+}
+
+// TestHandler_IngestUsageEventsBatch_SecondBatchWithRenamedScanRoot_UpdatesScanRoots
+// mirrors TestHandler_IngestUsageEventsBatch_SecondBatchWithChangedHostname_UpdatesMachine:
+// a second batch reporting a RENAMED scan root for the same
+// (install_id, scan_root_path) pair updates the stored name — a real
+// upsert, not an insert-once.
+func TestHandler_IngestUsageEventsBatch_SecondBatchWithRenamedScanRoot_UpdatesScanRoots(t *testing.T) {
+	router, conn := newIntegrationRouter(t)
+	_, rawKey := createAgentWithKey(t, conn, "collector-1")
+
+	first := doJSONRequest(t, router, http.MethodPost, "/api/v1/usage-events/batch", rawKey, map[string]any{
+		"install_id": "install-1",
+		"hostname":   "thw-home",
+		"scan_roots": []map[string]any{
+			{"path": "/home/thw-home/.claude", "name": "old-name", "source_type": "claude_code"},
+		},
+		"events": []map[string]any{usageEventBody("msg-1")},
+	})
+	require.Equal(t, http.StatusCreated, first.Code)
+
+	msg2 := usageEventBody("msg-2")
+	second := doJSONRequest(t, router, http.MethodPost, "/api/v1/usage-events/batch", rawKey, map[string]any{
+		"install_id": "install-1",
+		"hostname":   "thw-home",
+		"scan_roots": []map[string]any{
+			{"path": "/home/thw-home/.claude", "name": "new-name", "source_type": "claude_code"},
+		},
+		"events": []map[string]any{msg2},
+	})
+	require.Equal(t, http.StatusCreated, second.Code)
+
+	assert.Equal(t, 1, countScanRootRows(t, conn), "a resend with the same (install_id, scan_root_path) must update the one existing row")
+	var gotName string
+	require.NoError(t, conn.QueryRow(
+		`SELECT name FROM scan_roots WHERE install_id = ? AND scan_root_path = ?`,
+		"install-1", "/home/thw-home/.claude",
+	).Scan(&gotName))
+	assert.Equal(t, "new-name", gotName, "the stored name must be the changed one, not the first-seen one")
 }
 
 // TestHandler_IngestUsageEventsBatch_TimestampBecomesCreatedAt proves the
@@ -244,6 +349,7 @@ func TestHandler_IngestUsageEventsBatch_TimestampBecomesCreatedAt(t *testing.T) 
 	rec := doJSONRequest(t, router, http.MethodPost, "/api/v1/usage-events/batch", rawKey, map[string]any{
 		"install_id": "install-1",
 		"hostname":   "thw-home",
+		"scan_roots": defaultScanRootsBody(),
 		"events":     []map[string]any{usageEventBody("msg-1")},
 	})
 	require.Equal(t, http.StatusCreated, rec.Code)

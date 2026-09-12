@@ -6,6 +6,36 @@ import (
 	"strings"
 )
 
+// DefaultSourceType is the source_type value a ScanPath entry gets when
+// the collector config's JSON omits it (contract's "Collector config"
+// section: "optional in the config, defaults to 'claude_code' if
+// omitted — every scan root in practice is 'claude_code' for this
+// story, but the field is real and settable, not hardcoded").
+const DefaultSourceType = "claude_code"
+
+// ScannedFile pairs one discovered transcript file with the ScanPath
+// config entry that produced it (story-2/ticket-8) — the loop below
+// already walks each configured root separately, so this is wiring, not
+// new discovery logic. ScanRoot/Name/SourceType are what collector.go's
+// Run carries through to each of this file's events' own ScanRoot field
+// and to the batch payload's scan_roots array (client.go).
+type ScannedFile struct {
+	// Path is the discovered *.jsonl file's own path.
+	Path string
+	// ScanRoot is the owning ScanPath entry's *resolved* Path —
+	// expandHome already applied, matching what ends up in
+	// usage_events.scan_root (contract: "the entry's resolved Path").
+	ScanRoot string
+	// Name is the owning ScanPath entry's Name.
+	Name string
+	// SourceType is the owning ScanPath entry's SourceType, defaulted to
+	// DefaultSourceType if empty (defensive — LoadOrInitConfig already
+	// applies this same default when loading from disk, but this keeps
+	// FindTranscriptFiles correct for a caller that builds a ScanPath by
+	// hand without going through LoadOrInitConfig, e.g. tests).
+	SourceType string
+}
+
 // FindTranscriptFiles recursively finds every *.jsonl transcript file
 // under each of scanPaths — including nested
 // <session-uuid>/subagents/agent-*.jsonl files (ticket 9/10: a
@@ -21,16 +51,16 @@ import (
 // one of several configured roots shouldn't stop the others from being
 // scanned.
 //
-// Each scanPaths entry is passed through expandHome first: the goal and
-// ticket 12 both give scan_paths examples with a literal leading `~`
-// (["~/.claude", "~/.claude-local"]) — neither os.Stat nor filepath.Walk
-// expand that themselves, so without this a config written exactly as
-// documented would silently scan nothing.
-func FindTranscriptFiles(scanPaths []string) ([]string, error) {
-	var found []string
+// Each scanPaths entry's Path is passed through expandHome first: the
+// goal and ticket 12 both give scan_paths examples with a literal
+// leading `~` (["~/.claude", "~/.claude-local"]) — neither os.Stat nor
+// filepath.Walk expand that themselves, so without this a config written
+// exactly as documented would silently scan nothing.
+func FindTranscriptFiles(scanPaths []ScanPath) ([]ScannedFile, error) {
+	var found []ScannedFile
 
-	for _, root := range scanPaths {
-		root = expandHome(root)
+	for _, sp := range scanPaths {
+		root := expandHome(sp.Path)
 		info, err := os.Stat(root)
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -42,6 +72,11 @@ func FindTranscriptFiles(scanPaths []string) ([]string, error) {
 			continue
 		}
 
+		sourceType := sp.SourceType
+		if sourceType == "" {
+			sourceType = DefaultSourceType
+		}
+
 		err = filepath.Walk(root, func(path string, fi os.FileInfo, walkErr error) error {
 			if walkErr != nil {
 				return walkErr
@@ -50,7 +85,7 @@ func FindTranscriptFiles(scanPaths []string) ([]string, error) {
 				return nil
 			}
 			if strings.HasSuffix(path, ".jsonl") {
-				found = append(found, path)
+				found = append(found, ScannedFile{Path: path, ScanRoot: root, Name: sp.Name, SourceType: sourceType})
 			}
 			return nil
 		})

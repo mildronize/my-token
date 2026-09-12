@@ -65,6 +65,10 @@ var TableOwnership = map[string]string{
 	// domain — see that file's own header for why the hostname lookup
 	// belongs alongside usage_events rather than as its own module.
 	"machines": "usage",
+	// story-2/ticket-8: scan_roots is a third table owned by the same
+	// "usage" domain module (db/queries/scan_roots.sql) — the console's
+	// own scan-root-label lookup, same shape/lifecycle as machines above.
+	"scan_roots": "usage",
 }
 
 // ReadOnlyGrant is the only sanctioned way for a query file to reference

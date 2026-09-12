@@ -97,7 +97,7 @@ func TestCollectorIntegration_RunsAgainstTicket11sRealEndpoint(t *testing.T) {
 		usageLine("r5", "msg_subagent1", "claude-haiku-4-5", "text", 30, 15, 0, 0, "/home/thw-home/.typ-crews/freya", sessionID, "2026-09-10T12:02:00Z")+"\n")
 
 	cfg := collector.Config{
-		ScanPaths: []string{scanRoot},
+		ScanPaths: []collector.ScanPath{{Name: "main", Path: scanRoot, SourceType: "claude_code"}},
 		InstallID: "install-integration-test",
 		CoreURL:   server.URL,
 		APIKey:    rawKey,
@@ -128,6 +128,23 @@ func TestCollectorIntegration_RunsAgainstTicket11sRealEndpoint(t *testing.T) {
 	var gotPath string
 	require.NoError(t, conn.QueryRow(`SELECT path FROM usage_events WHERE id = ?`, "msg_turn1").Scan(&gotPath))
 	assert.Equal(t, "/home/thw-home/.typ-crews/freya", gotPath)
+
+	// story-2/ticket-8: scan_root is the transcript's own discovery root
+	// (scanRoot, this fixture's configured ScanPath.Path), distinct from
+	// `path` above (git-rooted from touched files) — both the per-event
+	// usage_events.scan_root column and the batch-level scan_roots table
+	// row (upserted from the request's own scan_roots array) must land.
+	var gotScanRoot string
+	require.NoError(t, conn.QueryRow(`SELECT scan_root FROM usage_events WHERE id = ?`, "msg_turn1").Scan(&gotScanRoot))
+	assert.Equal(t, scanRoot, gotScanRoot)
+
+	var scanRootName, scanRootSourceType string
+	require.NoError(t, conn.QueryRow(
+		`SELECT name, source_type FROM scan_roots WHERE install_id = ? AND scan_root_path = ?`,
+		cfg.InstallID, scanRoot,
+	).Scan(&scanRootName, &scanRootSourceType))
+	assert.Equal(t, "main", scanRootName)
+	assert.Equal(t, "claude_code", scanRootSourceType)
 
 	// cost is server-computed (ticket 11 — the collector never sends one),
 	// via the exact same pricing table internal/domain/usage.CostForUsage
@@ -178,7 +195,7 @@ func TestCollectorIntegration_PathResolvesToRealGitRoot(t *testing.T) {
 		usageLine("r1", "msg_git1", "claude-sonnet-4-5", "text", 10, 5, 0, 0, nestedCwd, sessionID, "2026-09-10T12:00:00Z")+"\n")
 
 	cfg := collector.Config{
-		ScanPaths: []string{scanRoot},
+		ScanPaths: []collector.ScanPath{{Name: "main", Path: scanRoot, SourceType: "claude_code"}},
 		InstallID: "install-git-integration-test",
 		CoreURL:   server.URL,
 		APIKey:    rawKey,
@@ -249,7 +266,7 @@ func TestCollectorIntegration_TouchedPathsMajorityVoteResolvesRealGitRoot(t *tes
 		toolUseLine(t, sessionID, "Bash", map[string]any{"command": "cd " + repoRoot + " && git status"})+"\n")
 
 	cfg := collector.Config{
-		ScanPaths: []string{scanRoot},
+		ScanPaths: []collector.ScanPath{{Name: "main", Path: scanRoot, SourceType: "claude_code"}},
 		InstallID: "install-touched-paths-integration-test",
 		CoreURL:   server.URL,
 		APIKey:    rawKey,

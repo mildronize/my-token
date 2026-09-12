@@ -20,6 +20,7 @@ func sampleEvent(id string) Event {
 		Path:                     "my-token",
 		Machine:                  "install-1",
 		Model:                    "claude-sonnet-4-5-20250929",
+		ScanRoot:                 "/home/thw-home/.claude",
 		InputTokens:              100,
 		OutputTokens:             50,
 		CacheReadInputTokens:     10,
@@ -274,4 +275,101 @@ func TestRepo_MachineHostnames_NoRows_EmptyMap(t *testing.T) {
 	hostnames, err := repo.MachineHostnames(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, hostnames)
+}
+
+// --- scan_roots: (install_id, scan_root_path) -> name/source_type
+// (story-2/ticket-8) ------------------------------------------------
+
+// TestI4_ScanRootsRepoOnlyQueriesScanRootsTable mirrors
+// TestI4_MachinesRepoOnlyQueriesMachinesTable above, for
+// db/queries/scan_roots.sql — scan_roots is a third table owned by this
+// same "usage" domain module (dbquery.TableOwnership), not a separate one.
+func TestI4_ScanRootsRepoOnlyQueriesScanRootsTable(t *testing.T) {
+	root := repoRootForTests(t)
+	queriesDir := filepath.Join(root, "db", "queries")
+
+	dbquery.AssertQueryFileReferencesOnlyOwnTable(t, queriesDir, "scan_roots.sql", "scan_roots")
+}
+
+// TestRepo_UpsertScanRoot_FirstCall_Inserts proves the plain first-seen
+// case: no prior row, UpsertScanRoot creates one.
+func TestRepo_UpsertScanRoot_FirstCall_Inserts(t *testing.T) {
+	ctx := context.Background()
+	conn := newTestDB(t)
+	repo := NewRepo(conn)
+
+	firstSeen := time.Date(2026, 9, 10, 8, 0, 0, 0, time.UTC)
+	require.NoError(t, repo.UpsertScanRoot(ctx, "install-1", "/home/thw-home/.claude", "main", "claude_code", firstSeen))
+
+	assert.Equal(t, 1, countRows(t, conn, "scan_roots"))
+	var gotName, gotSourceType string
+	require.NoError(t, conn.QueryRow(
+		`SELECT name, source_type FROM scan_roots WHERE install_id = ? AND scan_root_path = ?`,
+		"install-1", "/home/thw-home/.claude",
+	).Scan(&gotName, &gotSourceType))
+	assert.Equal(t, "main", gotName)
+	assert.Equal(t, "claude_code", gotSourceType)
+}
+
+// TestRepo_UpsertScanRoot_SecondCallWithRenamedScanRoot_UpdatesStoredValue
+// is this ticket's own explicitly-called-out acceptance test (mirroring
+// TestRepo_UpsertMachine_SecondCallWithChangedHostname_UpdatesStoredValue):
+// "a second batch with a renamed scan root updates the stored name, not
+// just the first-seen value." Also asserts the row count stays at 1
+// (INSERT OR REPLACE on the composite primary key, not a second row) and
+// that last_seen_at is refreshed to the second call's timestamp.
+func TestRepo_UpsertScanRoot_SecondCallWithRenamedScanRoot_UpdatesStoredValue(t *testing.T) {
+	ctx := context.Background()
+	conn := newTestDB(t)
+	repo := NewRepo(conn)
+
+	firstSeen := time.Date(2026, 9, 10, 8, 0, 0, 0, time.UTC)
+	require.NoError(t, repo.UpsertScanRoot(ctx, "install-1", "/home/thw-home/.claude", "old-name", "claude_code", firstSeen))
+
+	secondSeen := time.Date(2026, 9, 10, 9, 30, 0, 0, time.UTC)
+	require.NoError(t, repo.UpsertScanRoot(ctx, "install-1", "/home/thw-home/.claude", "new-name", "claude_code", secondSeen))
+
+	assert.Equal(t, 1, countRows(t, conn, "scan_roots"), "a resend must update the one existing row, not insert a second")
+
+	var gotName string
+	var gotLastSeenAt time.Time
+	require.NoError(t, conn.QueryRow(
+		`SELECT name, last_seen_at FROM scan_roots WHERE install_id = ? AND scan_root_path = ?`,
+		"install-1", "/home/thw-home/.claude",
+	).Scan(&gotName, &gotLastSeenAt))
+	assert.Equal(t, "new-name", gotName, "the stored name must be the changed one, not the first-seen one")
+	assert.True(t, gotLastSeenAt.Equal(secondSeen), "last_seen_at must be refreshed to the second call's timestamp")
+}
+
+// TestRepo_UpsertScanRoot_DifferentScanRootPaths_BothLand proves
+// UpsertScanRoot only ever touches the one row named by (installID,
+// scanRootPath) — a second, distinct scan root on the same install must
+// not clobber the first's row.
+func TestRepo_UpsertScanRoot_DifferentScanRootPaths_BothLand(t *testing.T) {
+	ctx := context.Background()
+	conn := newTestDB(t)
+	repo := NewRepo(conn)
+
+	now := time.Date(2026, 9, 10, 8, 0, 0, 0, time.UTC)
+	require.NoError(t, repo.UpsertScanRoot(ctx, "install-1", "/home/thw-home/.claude", "main", "claude_code", now))
+	require.NoError(t, repo.UpsertScanRoot(ctx, "install-1", "/home/thw-home/.claude-local", "backup-install", "claude_code", now))
+
+	assert.Equal(t, 2, countRows(t, conn, "scan_roots"))
+}
+
+// TestRepo_UpsertScanRoot_SameScanRootPathDifferentInstalls_BothLand
+// proves the primary key is genuinely composite — two different installs
+// registering a scan root under the *same* path (or even the same name,
+// goal.md's own "no shared/global naming registry across machines" rule)
+// don't collide.
+func TestRepo_UpsertScanRoot_SameScanRootPathDifferentInstalls_BothLand(t *testing.T) {
+	ctx := context.Background()
+	conn := newTestDB(t)
+	repo := NewRepo(conn)
+
+	now := time.Date(2026, 9, 10, 8, 0, 0, 0, time.UTC)
+	require.NoError(t, repo.UpsertScanRoot(ctx, "install-1", "/home/thw-home/.claude", "main", "claude_code", now))
+	require.NoError(t, repo.UpsertScanRoot(ctx, "install-2", "/home/thw-home/.claude", "main", "claude_code", now))
+
+	assert.Equal(t, 2, countRows(t, conn, "scan_roots"))
 }
