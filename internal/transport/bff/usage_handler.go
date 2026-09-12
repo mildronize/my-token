@@ -132,3 +132,33 @@ func (s *UsageServer) GetUsageWindows(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, bffapi.UsageWindows{Windows: wire})
 }
+
+// GetUsageScanRoots implements bffapi.ServerInterface —
+// GET /api/bff/usage/scan-roots (story-2/ticket-9): every registered
+// scan_roots row across every reporting install, joined with its
+// machine's hostname (usage.Service.ScanRoots does the join, in Go, over
+// two separate repo reads — no params, no window/group_by, this endpoint
+// exists purely to populate the console's future scan-root filter
+// dropdown, ticket 11).
+func (s *UsageServer) GetUsageScanRoots(c *gin.Context) {
+	if _, ok := bffOwnerID(c); !ok {
+		return
+	}
+
+	rows, err := s.Service.ScanRoots(c.Request.Context())
+	if err != nil {
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
+
+	wire := make([]bffapi.UsageScanRoot, 0, len(rows))
+	for _, r := range rows {
+		wire = append(wire, bffapi.UsageScanRoot{
+			InstallId:    r.InstallID,
+			Hostname:     r.Hostname,
+			ScanRootPath: r.ScanRootPath,
+			Name:         r.Name,
+		})
+	}
+	c.JSON(http.StatusOK, bffapi.UsageScanRootList{ScanRoots: wire})
+}

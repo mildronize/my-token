@@ -47,6 +47,16 @@ type fakeRepo struct {
 	scanRoots          map[string]scanRootRecord
 	upsertScanRootErr  error
 	upsertScanRootCall []upsertScanRootCall
+
+	// listScanRootsResult/listScanRootsErr back ListScanRoots directly
+	// (story-2/ticket-9) — a plain stand-in for the real SQL read
+	// (repo_test.go proves that against a real database), mirroring how
+	// f.events stands in for ListEventsInWindow above. Kept separate from
+	// f.scanRoots (UpsertScanRoot's own in-memory store) so
+	// Service.ScanRoots tests can seed exactly the rows they want without
+	// going through UpsertScanRoot first.
+	listScanRootsResult []ScanRootRecord
+	listScanRootsErr    error
 }
 
 type upsertMachineCall struct {
@@ -124,6 +134,13 @@ func (f *fakeRepo) MachineHostnames(ctx context.Context) (map[string]string, err
 		out[k] = v
 	}
 	return out, nil
+}
+
+func (f *fakeRepo) ListScanRoots(ctx context.Context) ([]ScanRootRecord, error) {
+	if f.listScanRootsErr != nil {
+		return nil, f.listScanRootsErr
+	}
+	return f.listScanRootsResult, nil
 }
 
 func (f *fakeRepo) UpsertScanRoot(ctx context.Context, installID, scanRootPath, name, sourceType string, lastSeenAt time.Time) error {
@@ -542,4 +559,110 @@ func TestService_UpsertScanRoots_RepoError_Propagates(t *testing.T) {
 
 	err := svc.UpsertScanRoots(context.Background(), "install-1", []UpsertScanRootInput{{Path: "/x", Name: "main", SourceType: "claude_code"}}, time.Now())
 	assert.ErrorIs(t, err, repo.upsertScanRootErr)
+}
+
+// --- Service.ScanRoots (story-2/ticket-9) -------------------------------
+// Backs GET /api/bff/usage/scan-roots (ticket 9's Verifiable section):
+// every scan_roots row, each joined with its machine's hostname the same
+// way group_by=machine/group_by=path's own substitution already does —
+// two separate repo reads combined in Go, not a SQL JOIN.
+
+// TestService_ScanRoots_JoinsHostnameFromMachines is this ticket's own
+// core acceptance test: a scan_roots row whose install_id has a
+// corresponding machines row comes back with that row's hostname.
+func TestService_ScanRoots_JoinsHostnameFromMachines(t *testing.T) {
+	repo := newFakeRepo()
+	repo.listScanRootsResult = []ScanRootRecord{
+		{InstallID: "install-1", ScanRootPath: "/home/thw-home/.claude", Name: "main"},
+	}
+	repo.machines["install-1"] = "thw-home"
+
+	svc := NewService(repo)
+	got, err := svc.ScanRoots(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, got, 1)
+	assert.Equal(t, ScanRootWithHostname{
+		InstallID:    "install-1",
+		Hostname:     "thw-home",
+		ScanRootPath: "/home/thw-home/.claude",
+		Name:         "main",
+	}, got[0])
+}
+
+// TestService_ScanRoots_NoMachinesRow_FallsBackToInstallID covers the
+// ticket's own explicitly-named edge case ("Verifiable" section): a
+// scan_roots row whose install_id has no machines row falls back to
+// showing the raw install_id as the hostname — the same "never a blank
+// label" precedent machines' own fallback (substituteMachineHostnames)
+// already sets.
+func TestService_ScanRoots_NoMachinesRow_FallsBackToInstallID(t *testing.T) {
+	repo := newFakeRepo()
+	repo.listScanRootsResult = []ScanRootRecord{
+		{InstallID: "install-orphan", ScanRootPath: "/home/thw-home/.claude", Name: "main"},
+	}
+	// Deliberately no repo.machines["install-orphan"] entry.
+
+	svc := NewService(repo)
+	got, err := svc.ScanRoots(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, got, 1)
+	assert.Equal(t, "install-orphan", got[0].Hostname, "must fall back to the raw install_id, never a blank hostname")
+}
+
+// TestService_ScanRoots_ReturnsEveryRowAcrossInstalls proves ScanRoots
+// doesn't scope to a single install — every registered scan_roots row
+// across every reporting machine comes back.
+func TestService_ScanRoots_ReturnsEveryRowAcrossInstalls(t *testing.T) {
+	repo := newFakeRepo()
+	repo.listScanRootsResult = []ScanRootRecord{
+		{InstallID: "install-1", ScanRootPath: "/home/thw-home/.claude", Name: "main"},
+		{InstallID: "install-2", ScanRootPath: "/home/thw-home/.claude", Name: "main"},
+	}
+	repo.machines["install-1"] = "thw-home"
+	repo.machines["install-2"] = "thw-laptop"
+
+	svc := NewService(repo)
+	got, err := svc.ScanRoots(context.Background())
+	require.NoError(t, err)
+
+	assert.ElementsMatch(t, []ScanRootWithHostname{
+		{InstallID: "install-1", Hostname: "thw-home", ScanRootPath: "/home/thw-home/.claude", Name: "main"},
+		{InstallID: "install-2", Hostname: "thw-laptop", ScanRootPath: "/home/thw-home/.claude", Name: "main"},
+	}, got)
+}
+
+// TestService_ScanRoots_NoRows_EmptySlice proves the zero-registered-roots
+// case returns an empty slice, not an error, and never consults
+// MachineHostnames at all (nothing to join).
+func TestService_ScanRoots_NoRows_EmptySlice(t *testing.T) {
+	repo := newFakeRepo()
+	repo.hostnamesErr = errors.New("must not be called when there are no scan roots")
+
+	svc := NewService(repo)
+	got, err := svc.ScanRoots(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+func TestService_ScanRoots_ListScanRootsRepoError_Propagates(t *testing.T) {
+	repo := newFakeRepo()
+	repo.listScanRootsErr = errors.New("db down")
+
+	svc := NewService(repo)
+	_, err := svc.ScanRoots(context.Background())
+	assert.ErrorIs(t, err, repo.listScanRootsErr)
+}
+
+func TestService_ScanRoots_MachineHostnamesRepoError_Propagates(t *testing.T) {
+	repo := newFakeRepo()
+	repo.listScanRootsResult = []ScanRootRecord{
+		{InstallID: "install-1", ScanRootPath: "/home/thw-home/.claude", Name: "main"},
+	}
+	repo.hostnamesErr = errors.New("db down")
+
+	svc := NewService(repo)
+	_, err := svc.ScanRoots(context.Background())
+	assert.ErrorIs(t, err, repo.hostnamesErr)
 }

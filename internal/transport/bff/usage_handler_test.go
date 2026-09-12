@@ -96,6 +96,26 @@ func decodeUsageWindows(t *testing.T, rec *httptest.ResponseRecorder) bffapi.Usa
 	return got
 }
 
+func decodeUsageScanRootList(t *testing.T, rec *httptest.ResponseRecorder) bffapi.UsageScanRootList {
+	t.Helper()
+	var got bffapi.UsageScanRootList
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	return got
+}
+
+// seedScanRoot inserts one scan_roots row directly (bypassing
+// usage.Repo/usage.Service's own UpsertScanRoot path) — mirrors
+// seedMachine's own reasoning (above): these tests shouldn't need to
+// trust a second package's write path just to set up a fixture.
+func seedScanRoot(t *testing.T, conn *sql.DB, installID, scanRootPath, name string, lastSeenAt time.Time) {
+	t.Helper()
+	_, err := conn.Exec(
+		`INSERT INTO scan_roots (install_id, scan_root_path, name, source_type, last_seen_at) VALUES (?, ?, ?, 'claude_code', ?)`,
+		installID, scanRootPath, name, lastSeenAt,
+	)
+	require.NoError(t, err)
+}
+
 // TestGetUsageSummary_GroupsAndTotalsMatchSeededRows is this endpoint's
 // own core acceptance test: three events across two actors, all inside
 // the requested window, group_by=actor.
@@ -373,6 +393,71 @@ func TestGetUsageWindows_ReturnsSevenRowsInOrder(t *testing.T) {
 func TestGetUsageWindows_MissingSession_Unauthorized(t *testing.T) {
 	router, _, _ := newBFFRouterForUsage(t)
 	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/usage/windows", "", nil)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+// --- GET /api/bff/usage/scan-roots (story-2/ticket-9) -------------------
+
+// TestGetUsageScanRoots_ReturnsEveryRootAcrossTwoInstalls is this
+// ticket's own core acceptance test: machines + scan_roots rows seeded
+// across two install_ids, every row comes back with correct hostname
+// joins.
+func TestGetUsageScanRoots_ReturnsEveryRootAcrossTwoInstalls(t *testing.T) {
+	router, session, conn := newBFFRouterForUsage(t)
+	now := time.Now().UTC()
+
+	seedMachine(t, conn, "install-a", "thw-home", now)
+	seedMachine(t, conn, "install-b", "thw-laptop", now)
+	seedScanRoot(t, conn, "install-a", "/home/thw-home/.claude", "main", now)
+	seedScanRoot(t, conn, "install-a", "/home/thw-home/.claude-local", "backup-install", now)
+	seedScanRoot(t, conn, "install-b", "/home/laptop/.claude", "main", now)
+
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/usage/scan-roots", session, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	got := decodeUsageScanRootList(t, rec)
+	assert.ElementsMatch(t, []bffapi.UsageScanRoot{
+		{InstallId: "install-a", Hostname: "thw-home", ScanRootPath: "/home/thw-home/.claude", Name: "main"},
+		{InstallId: "install-a", Hostname: "thw-home", ScanRootPath: "/home/thw-home/.claude-local", Name: "backup-install"},
+		{InstallId: "install-b", Hostname: "thw-laptop", ScanRootPath: "/home/laptop/.claude", Name: "main"},
+	}, got.ScanRoots)
+}
+
+// TestGetUsageScanRoots_NoMachinesRow_FallsBackToInstallID covers the
+// ticket's own explicitly-named edge case: a scan_roots row whose
+// install_id has no machines row falls back to showing the raw
+// install_id as the hostname, never a blank one.
+func TestGetUsageScanRoots_NoMachinesRow_FallsBackToInstallID(t *testing.T) {
+	router, session, conn := newBFFRouterForUsage(t)
+	now := time.Now().UTC()
+
+	// Deliberately no seedMachine call for "install-orphan".
+	seedScanRoot(t, conn, "install-orphan", "/home/thw-home/.claude", "main", now)
+
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/usage/scan-roots", session, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	got := decodeUsageScanRootList(t, rec)
+	require.Len(t, got.ScanRoots, 1)
+	assert.Equal(t, "install-orphan", got.ScanRoots[0].Hostname, "must fall back to the raw install_id, never a blank hostname")
+	assert.Equal(t, "install-orphan", got.ScanRoots[0].InstallId)
+}
+
+// TestGetUsageScanRoots_NoScanRoots_EmptyArray proves the zero-registered
+// case returns an empty array on the wire, not null or an error.
+func TestGetUsageScanRoots_NoScanRoots_EmptyArray(t *testing.T) {
+	router, session, _ := newBFFRouterForUsage(t)
+
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/usage/scan-roots", session, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	got := decodeUsageScanRootList(t, rec)
+	assert.Empty(t, got.ScanRoots)
+}
+
+func TestGetUsageScanRoots_MissingSession_Unauthorized(t *testing.T) {
+	router, _, _ := newBFFRouterForUsage(t)
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/usage/scan-roots", "", nil)
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 }
 

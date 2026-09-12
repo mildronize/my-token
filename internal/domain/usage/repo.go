@@ -40,6 +40,21 @@ type Event struct {
 	CreatedAt                time.Time
 }
 
+// ScanRootRecord is one row of the scan_roots table, as read back —
+// story-2/ticket-9. Distinct from UpsertScanRootInput (service.go, the
+// write-side per-entry shape) and from the wire ScanRoot type
+// (internal/bffapi, generated from bff-openapi.yaml), same "distinct name
+// per layer" convention Event/IngestEvent already follow, so a
+// reader/grep never has to guess which package's type is meant. Carries
+// no hostname of its own — Service.ScanRoots joins that in from
+// MachineHostnames (below), same as the existing group_by=machine/
+// group_by=path substitution pattern.
+type ScanRootRecord struct {
+	InstallID    string
+	ScanRootPath string
+	Name         string
+}
+
 // Repository is the subset of Repo's methods Service depends on —
 // declared here, not in repo.go's own type, so tests can supply a fake
 // without a real database.
@@ -90,6 +105,16 @@ type Repository interface {
 	// `scan_roots`), mirroring UpsertMachine's own upsert-on-every-batch
 	// design.
 	UpsertScanRoot(ctx context.Context, installID, scanRootPath, name, sourceType string, lastSeenAt time.Time) error
+
+	// ListScanRoots returns every registered scan_roots row across every
+	// reporting install — story-2/ticket-9: Service.ScanRoots' own read
+	// path backing GET /api/bff/usage/scan-roots (contract's API
+	// surface). No window filter, no group_by, no hostname join at this
+	// layer (Service.ScanRoots does that in Go, over MachineHostnames'
+	// existing result, mirroring the group_by=machine/group_by=path
+	// substitution pattern above). A no-rows result is an empty slice,
+	// not an error — mirrors MachineHostnames' own "no known rows" case.
+	ListScanRoots(ctx context.Context) ([]ScanRootRecord, error)
 }
 
 // Repo is the only type in this package that imports the sqlc-generated
@@ -232,4 +257,25 @@ func (r *Repo) UpsertScanRoot(ctx context.Context, installID, scanRootPath, name
 		SourceType:   sourceType,
 		LastSeenAt:   lastSeenAt,
 	})
+}
+
+// ListScanRoots implements Repository.ListScanRoots over the
+// sqlc-generated ListScanRoots query (db/queries/scan_roots.sql) —
+// story-2/ticket-9. No SQL JOIN against machines here (that query's own
+// doc comment explains why); Service.ScanRoots is where the hostname
+// join happens, in Go, over MachineHostnames' existing result.
+func (r *Repo) ListScanRoots(ctx context.Context) ([]ScanRootRecord, error) {
+	rows, err := r.q.ListScanRoots(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ScanRootRecord, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, ScanRootRecord{
+			InstallID:    row.InstallID,
+			ScanRootPath: row.ScanRootPath,
+			Name:         row.Name,
+		})
+	}
+	return out, nil
 }

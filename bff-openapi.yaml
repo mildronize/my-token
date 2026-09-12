@@ -219,6 +219,33 @@ paths:
                 $ref: "#/components/schemas/UsageWindows"
         "401":
           $ref: "#/components/responses/Unauthorized"
+  /usage/scan-roots:
+    get:
+      operationId: getUsageScanRoots
+      summary: Every registered scan root across every reporting install.
+      description: >
+        story-2/ticket-9: no parameters — exists purely to populate the
+        console's future scan-root filter dropdown (ticket 11), since
+        there is no `group_by=scan_root` breakdown panel this story's
+        scope adds to derive the list from otherwise. Each row joins
+        `scan_roots` to `machines` on `install_id` for the hostname, the
+        same join style `getUsageSummary`'s own hostname substitution
+        already uses (read via a repo method, not a SQL JOIN, per that
+        same precedent) — `hostname` falls back to the raw `install_id`
+        itself if a scan root's install_id has no corresponding
+        `machines` row (shouldn't normally happen given both are upserted
+        from the same ingestion batch, but the same "never a blank label"
+        rule `getUsageSummary`'s own `machine`/`path` group_by fallback
+        already sets applies here too).
+      responses:
+        "200":
+          description: Every registered scan root, across every reporting install.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsageScanRootList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 components:
   schemas:
     Me:
@@ -391,6 +418,42 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/UsageWindowRow"
+    UsageScanRoot:
+      type: object
+      additionalProperties: false
+      required: [install_id, hostname, scan_root_path, name]
+      description: >
+        story-2/ticket-9: one row of GET /usage/scan-roots. Field names
+        are snake_case verbatim from the contract's own API surface
+        section, matching the rest of this usage domain's own break from
+        this spec's otherwise-camelCase convention (see getUsageSummary's
+        own doc comment for why).
+      properties:
+        install_id:
+          type: string
+          description: The reporting install's raw install_id — always present, even when hostname had to fall back to it.
+        hostname:
+          type: string
+          description: >
+            machines.hostname for this row's install_id, falling back to
+            the raw install_id itself if no corresponding machines row
+            exists (never a blank label).
+        scan_root_path:
+          type: string
+          description: The raw scan-root path, as configured in the collector's own scan_paths.
+        name:
+          type: string
+          description: The operator-assigned label for this scan root (per-install, no shared/global naming registry across machines).
+    UsageScanRootList:
+      type: object
+      additionalProperties: false
+      required: [scan_roots]
+      properties:
+        scan_roots:
+          type: array
+          items:
+            $ref: "#/components/schemas/UsageScanRoot"
+          description: Every registered scan root across every reporting install.
     Error:
       type: object
       required: [error]

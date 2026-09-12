@@ -60,6 +60,18 @@ type Querier interface {
 	// reuses that logic instead of re-deriving group_by/window aggregation
 	// in SQL.
 	ListMachines(ctx context.Context) ([]ListMachinesRow, error)
+	// story-2/ticket-9: every registered scan_roots row across every
+	// reporting install -- GET /api/bff/usage/scan-roots' own read path
+	// (internal/domain/usage/service.go's Service.ScanRoots), populating the
+	// console's future scan-root filter dropdown (ticket 11). No window
+	// filter, no group_by -- this table is not usage_events, it's a small
+	// upserted label table (mirrors ListMachines in machines.sql). The
+	// install_id -> hostname join happens in Go over this result
+	// (Service.ScanRoots, reusing the existing MachineHostnames query), not
+	// as a SQL JOIN here -- same reasoning ListMachines' own doc comment
+	// gives: reuse the pure aggregation/substitution logic that already
+	// exists rather than re-deriving a join in SQL.
+	ListScanRoots(ctx context.Context) ([]ListScanRootsRow, error)
 	// story-1/ticket-14: every event whose created_at falls between the two
 	// bound parameters below, range_start inclusive, range_end exclusive.
 	// The raw rows behind the console's own read surface --

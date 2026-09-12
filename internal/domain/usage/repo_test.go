@@ -373,3 +373,62 @@ func TestRepo_UpsertScanRoot_SameScanRootPathDifferentInstalls_BothLand(t *testi
 
 	assert.Equal(t, 2, countRows(t, conn, "scan_roots"))
 }
+
+// TestRepo_ListScanRoots_NoRows_EmptySlice mirrors
+// TestRepo_MachineHostnames_NoRows_EmptyMap: the zero-rows case returns an
+// empty (nil-or-empty) slice, not an error — story-2/ticket-9's
+// Service.ScanRoots relies on this to mean "nothing registered yet," not a
+// failure.
+func TestRepo_ListScanRoots_NoRows_EmptySlice(t *testing.T) {
+	ctx := context.Background()
+	conn := newTestDB(t)
+	repo := NewRepo(conn)
+
+	rows, err := repo.ListScanRoots(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, rows)
+}
+
+// TestRepo_ListScanRoots_ReturnsEveryRegisteredRoot is this ticket's own
+// core acceptance test at the repo layer: every scan_roots row upserted so
+// far comes back, across more than one install_id.
+func TestRepo_ListScanRoots_ReturnsEveryRegisteredRoot(t *testing.T) {
+	ctx := context.Background()
+	conn := newTestDB(t)
+	repo := NewRepo(conn)
+
+	now := time.Date(2026, 9, 10, 8, 0, 0, 0, time.UTC)
+	require.NoError(t, repo.UpsertScanRoot(ctx, "install-1", "/home/thw-home/.claude", "main", "claude_code", now))
+	require.NoError(t, repo.UpsertScanRoot(ctx, "install-1", "/home/thw-home/.claude-local", "backup-install", "claude_code", now))
+	require.NoError(t, repo.UpsertScanRoot(ctx, "install-2", "/home/thw-home/.claude", "main", "claude_code", now))
+
+	got, err := repo.ListScanRoots(ctx)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []ScanRootRecord{
+		{InstallID: "install-1", ScanRootPath: "/home/thw-home/.claude", Name: "main"},
+		{InstallID: "install-1", ScanRootPath: "/home/thw-home/.claude-local", Name: "backup-install"},
+		{InstallID: "install-2", ScanRootPath: "/home/thw-home/.claude", Name: "main"},
+	}, got)
+}
+
+// TestRepo_ListScanRoots_ReflectsRenames proves ListScanRoots reads back
+// whatever UpsertScanRoot most recently wrote — a renamed scan root's new
+// name, not the first-seen one (mirrors
+// TestRepo_UpsertScanRoot_SecondCallWithRenamedScanRoot_UpdatesStoredValue's
+// own direct-SQL assertion, this time through the repo's own read method).
+func TestRepo_ListScanRoots_ReflectsRenames(t *testing.T) {
+	ctx := context.Background()
+	conn := newTestDB(t)
+	repo := NewRepo(conn)
+
+	firstSeen := time.Date(2026, 9, 10, 8, 0, 0, 0, time.UTC)
+	require.NoError(t, repo.UpsertScanRoot(ctx, "install-1", "/home/thw-home/.claude", "old-name", "claude_code", firstSeen))
+
+	secondSeen := time.Date(2026, 9, 10, 9, 30, 0, 0, time.UTC)
+	require.NoError(t, repo.UpsertScanRoot(ctx, "install-1", "/home/thw-home/.claude", "new-name", "claude_code", secondSeen))
+
+	got, err := repo.ListScanRoots(ctx)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "new-name", got[0].Name)
+}

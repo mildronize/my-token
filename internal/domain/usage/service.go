@@ -245,6 +245,63 @@ func (s *Service) UpsertScanRoots(ctx context.Context, installID string, scanRoo
 	return nil
 }
 
+// ScanRootWithHostname is one row of GET /api/bff/usage/scan-roots
+// (story-2/ticket-9, contract's API surface) — a scan_roots row joined,
+// in Go rather than via a SQL JOIN, with its machine's hostname. Named
+// distinctly from both ScanRootRecord (repo.go, the raw un-joined row)
+// and the wire ScanRoot type (internal/bffapi, generated), same
+// "distinct name per layer" convention this package already follows.
+type ScanRootWithHostname struct {
+	InstallID    string
+	Hostname     string
+	ScanRootPath string
+	Name         string
+}
+
+// ScanRoots backs GET /api/bff/usage/scan-roots (story-2/ticket-9): every
+// registered scan_roots row across every reporting install, each joined
+// with machines.hostname the same way Service.Summary's own
+// group_by=machine/group_by=path substitution already does — two
+// separate repo reads (ListScanRoots, MachineHostnames) combined here in
+// Go, not a SQL JOIN (bff-openapi.yaml's own operation doc explains why:
+// consistency with that existing precedent, not a new pattern). A
+// scan_roots row whose install_id has no corresponding machines row
+// falls back to showing the raw install_id as Hostname — the same
+// "never a blank label" fallback substituteMachineHostnames already
+// establishes — rather than an empty string or an error. No scan roots
+// registered at all short-circuits to an empty slice without even
+// calling MachineHostnames, mirroring Summary's own len(breakdown)==0
+// guard on its substitution passes.
+func (s *Service) ScanRoots(ctx context.Context) ([]ScanRootWithHostname, error) {
+	records, err := s.Repo.ListScanRoots(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(records) == 0 {
+		return []ScanRootWithHostname{}, nil
+	}
+
+	hostnames, err := s.Repo.MachineHostnames(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]ScanRootWithHostname, 0, len(records))
+	for _, r := range records {
+		hostname := r.InstallID
+		if h, ok := hostnames[r.InstallID]; ok && h != "" {
+			hostname = h
+		}
+		out = append(out, ScanRootWithHostname{
+			InstallID:    r.InstallID,
+			Hostname:     hostname,
+			ScanRootPath: r.ScanRootPath,
+			Name:         r.Name,
+		})
+	}
+	return out, nil
+}
+
 // WindowTotals is one row of GET /api/bff/usage/windows' fixed table —
 // Window names which of the fixed ranges this row covers, Totals is
 // that range's turns/tokens/cost (no group_by on this endpoint at all,
