@@ -2,6 +2,7 @@ package usage
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -114,8 +115,16 @@ func (s *Service) Summary(ctx context.Context, window Window, groupBy GroupBy, n
 
 	result := Aggregate(events, groupBy)
 
-	if groupBy == GroupByMachine {
+	switch groupBy {
+	case GroupByMachine:
 		if err := s.substituteMachineHostnames(ctx, result.Breakdown); err != nil {
+			return SummaryResult{}, err
+		}
+	case GroupByPath:
+		// story-2/ticket-7: the same hostname-substitution pass, extended
+		// to group_by=path now that Aggregate's own keyFor(GroupByPath)
+		// key is machine-prefixed (summary.go).
+		if err := s.substituteMachineHostnamesInPathKeys(ctx, result.Breakdown); err != nil {
 			return SummaryResult{}, err
 		}
 	}
@@ -147,6 +156,41 @@ func (s *Service) substituteMachineHostnames(ctx context.Context, breakdown []Br
 		if hostname, ok := hostnames[installID]; ok && hostname != "" {
 			breakdown[i].Key = hostname
 			breakdown[i].RawKey = installID
+		}
+	}
+	return nil
+}
+
+// substituteMachineHostnamesInPathKeys is substituteMachineHostnames'
+// group_by=path counterpart (story-2/ticket-7, contract's "Cross-machine
+// path identity" section): Aggregate's own GroupByPath key is
+// `<install_id>:<path>` (summary.go's keyFor), not a bare install_id, so
+// this substitutes only the install_id prefix — `<install_id>:<path>`
+// becomes `<hostname>:<path>` — rather than replacing the whole key the
+// way the group_by=machine pass does. RawKey stashes the original,
+// unsubstituted `<install_id>:<path>` key so the console can still show
+// the ground truth (same tooltip pattern as `machine`'s own RawKey). A
+// row whose install_id has no machines row at all is left exactly as
+// Aggregate produced it (Key stays `<install_id>:<path>`, RawKey stays
+// empty) — same "never show a blank label" fallback as
+// substituteMachineHostnames.
+func (s *Service) substituteMachineHostnamesInPathKeys(ctx context.Context, breakdown []BreakdownRow) error {
+	if len(breakdown) == 0 {
+		return nil
+	}
+	hostnames, err := s.Repo.MachineHostnames(ctx)
+	if err != nil {
+		return err
+	}
+	for i := range breakdown {
+		rawKey := breakdown[i].Key // "<install_id>:<path>", per keyFor(GroupByPath)
+		installID, path, found := strings.Cut(rawKey, ":")
+		if !found {
+			continue // defensive: keyFor always produces machine+":"+path
+		}
+		if hostname, ok := hostnames[installID]; ok && hostname != "" {
+			breakdown[i].Key = hostname + ":" + path
+			breakdown[i].RawKey = rawKey
 		}
 	}
 	return nil
