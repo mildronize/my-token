@@ -44,6 +44,30 @@ type IngestEvent struct {
 	Timestamp time.Time
 }
 
+// Filter narrows Service.Summary/Service.Windows' own result set,
+// AND-composed with the window bound and with each other when both
+// fields are set (story-2/ticket-10, contract's API surface section:
+// GET /usage/summary and GET /usage/windows both gain optional
+// `machine`/`scan_root` query params). Both fields empty is the zero
+// value and means "no filter at all" — every pre-ticket-10 caller of
+// Summary/Windows behaves exactly as before by simply passing Filter{}.
+//
+//   - Machine is the raw install_id (bare, not a hostname) — the wire's
+//     own `machine` query param, unchanged from how usage_events.machine
+//     and group_by=machine's own raw key already work.
+//   - ScanRoot is the wire's own composite `<install_id>:<scan_root_path>`
+//     string — same machine-prefix convention story-2/ticket-7
+//     established for group_by=path, for the identical reason a bare
+//     scan-root path/name is ambiguous across machines (naming is
+//     per-install, contract's Data model). Repo.ListEventsInWindow
+//     (repo.go) is the only place this composite is ever decomposed into
+//     its two halves — Service and every caller above it pass the single
+//     wire-shaped string straight through, untouched.
+type Filter struct {
+	Machine  string
+	ScanRoot string
+}
+
 // Service implements the usage domain contract (story-1/ticket-11) on
 // top of a Repository. This package never resolves an actor itself (I4)
 // — the transport layer authenticates the caller (the collector's own
@@ -108,13 +132,21 @@ func (s *Service) IngestBatch(ctx context.Context, events []IngestEvent) (receiv
 // time.Now() called internally, so WindowBounds' calendar-anchoring is
 // exercised deterministically by tests calling this method directly,
 // without needing to fake a clock.
-func (s *Service) Summary(ctx context.Context, window Window, groupBy GroupBy, now time.Time) (SummaryResult, error) {
+//
+// filter (story-2/ticket-10) is passed straight through to
+// Repo.ListEventsInWindow, unmodified — the repo layer is the only place
+// filter.ScanRoot's composite is decomposed (repo.go). Because filtering
+// happens before Aggregate ever runs, totals/breakdown/reporting_installs
+// are all scoped together automatically (contract's "Console filters"
+// section: global, not per-panel) — there is no separate "filter the
+// totals" step to forget.
+func (s *Service) Summary(ctx context.Context, window Window, groupBy GroupBy, filter Filter, now time.Time) (SummaryResult, error) {
 	start, end, err := WindowBounds(window, now)
 	if err != nil {
 		return SummaryResult{}, err
 	}
 
-	events, err := s.Repo.ListEventsInWindow(ctx, start, end)
+	events, err := s.Repo.ListEventsInWindow(ctx, start, end, filter)
 	if err != nil {
 		return SummaryResult{}, err
 	}
@@ -316,14 +348,19 @@ type WindowTotals struct {
 // entries, 5h/24h/today/week/month/year/lifetime), in that fixed order,
 // each computed the same way Summary computes a single window's totals —
 // this just loops over all of them instead of taking one from the caller.
-func (s *Service) Windows(ctx context.Context, now time.Time) ([]WindowTotals, error) {
+//
+// filter (story-2/ticket-10) is applied to every one of the seven
+// per-window queries identically, mirroring Summary's own filter
+// handling — the contract's own requirement that an active console
+// filter scope "every row of the fixed table," not just one.
+func (s *Service) Windows(ctx context.Context, filter Filter, now time.Time) ([]WindowTotals, error) {
 	rows := make([]WindowTotals, 0, len(Windows))
 	for _, w := range Windows {
 		start, end, err := WindowBounds(w, now)
 		if err != nil {
 			return nil, err
 		}
-		events, err := s.Repo.ListEventsInWindow(ctx, start, end)
+		events, err := s.Repo.ListEventsInWindow(ctx, start, end, filter)
 		if err != nil {
 			return nil, err
 		}

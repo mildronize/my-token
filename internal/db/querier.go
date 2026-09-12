@@ -77,7 +77,20 @@ type Querier interface {
 	// The raw rows behind the console's own read surface --
 	// internal/domain/usage/summary.go's Aggregate does the group_by/window
 	// math in Go, pure and unit-testable without sqlc/a real database; this
-	// query's only job is the window filter itself.
+	// query's own job is the window/machine/scan_root filters.
+	//
+	// story-2/ticket-10 adds two optional filters, AND-composed with the
+	// window bound and with each other: machine (the raw install_id) and
+	// the scan_root pair (scan_root_install_id + scan_root_path together --
+	// internal/domain/usage/repo.go decomposes the wire's own
+	// <install_id>:<scan_root_path> composite into these two arguments
+	// before this query ever runs, same machine-prefix convention ticket 7
+	// established for group_by=path, contract's API surface section). Each
+	// narg is NULL when its own filter was not requested --
+	// "sqlc.narg(x) IS NULL OR column = sqlc.narg(x)" is the standard
+	// optional-filter idiom, so one query text covers "no filter"/"one
+	// filter"/"both filters" without a query-builder assembling different
+	// SQL per case.
 	ListUsageEventsInWindow(ctx context.Context, arg ListUsageEventsInWindowParams) ([]ListUsageEventsInWindowRow, error)
 	RevokeAPIKey(ctx context.Context, arg RevokeAPIKeyParams) (ApiKey, error)
 	// The owner-facing revoke endpoint's own query (I21): session-gated to a

@@ -183,6 +183,35 @@ paths:
           schema:
             type: string
             enum: [actor, path, machine]
+        - name: machine
+          in: query
+          required: false
+          schema:
+            type: string
+          description: >
+            story-2/ticket-10: optional install_id filter. When set,
+            scopes `totals`/`breakdown`/`reporting_installs` to only
+            events reported by this machine -- not just one panel's own
+            dimension (contract's Console filters section: global, not
+            per-panel). AND-composed with `window` and with `scan_root`
+            when both are set. Absent means no machine constraint.
+        - name: scan_root
+          in: query
+          required: false
+          schema:
+            type: string
+          description: >
+            story-2/ticket-10: optional composite
+            `<install_id>:<scan_root_path>` filter -- same
+            machine-prefix convention as `group_by=path`'s own
+            cross-machine fix (ticket 7), for the identical reason: a
+            bare scan-root path/name is ambiguous across machines since
+            naming is per-install (contract's Data model). AND-composed
+            with `window` and with `machine` when both are set. An
+            invalid shape, or a well-formed but non-existent
+            `install_id:scan_root_path` pair, yields an empty/zero
+            result -- not a 400 -- mirroring this API's existing
+            "no matching data" tolerance versus a malformed request.
       responses:
         "200":
           description: Totals, a breakdown by the requested dimension, and the window-scoped reporting-install count.
@@ -210,6 +239,26 @@ paths:
         "lifetime is tab-only-tile, never a tab" call), so both belong in
         this fixed table too for consistency between what's clickable and
         what's listed.
+
+        story-2/ticket-10: gains the same two optional `machine`/
+        `scan_root` filters `getUsageSummary` already has, so the fixed
+        table also respects an active console filter (story-1 shipped
+        this endpoint with zero params) -- see that operation's own
+        `machine`/`scan_root` parameter docs for the exact semantics,
+        identical here.
+      parameters:
+        - name: machine
+          in: query
+          required: false
+          schema:
+            type: string
+          description: story-2/ticket-10 -- same optional install_id filter as getUsageSummary's own `machine` parameter.
+        - name: scan_root
+          in: query
+          required: false
+          schema:
+            type: string
+          description: story-2/ticket-10 -- same optional `<install_id>:<scan_root_path>` filter as getUsageSummary's own `scan_root` parameter.
       responses:
         "200":
           description: One row per fixed window, in 5h, 24h, today, week, month, year, lifetime order.

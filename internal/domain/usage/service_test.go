@@ -3,6 +3,7 @@ package usage
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -76,6 +77,7 @@ type upsertScanRootCall struct {
 
 type windowCall struct {
 	start, end time.Time
+	filter     Filter
 }
 
 func newFakeRepo() *fakeRepo {
@@ -100,16 +102,40 @@ func (f *fakeRepo) InsertBatch(ctx context.Context, batch []Event) (int64, error
 
 // ListEventsInWindow returns every seeded event whose CreatedAt falls in
 // [start, end) — a plain in-memory stand-in for repo.go's real SQL
-// filter, and records the call so tests can assert Service computed the
-// range it meant to.
-func (f *fakeRepo) ListEventsInWindow(ctx context.Context, start, end time.Time) ([]Event, error) {
-	f.windowCalls = append(f.windowCalls, windowCall{start: start, end: end})
+// filter, and records the call (including the filter it was given) so
+// tests can assert Service computed the range/filter it meant to.
+//
+// story-2/ticket-10: filter.Machine/filter.ScanRoot are applied the same
+// way repo.go's real SQL AND-composes them — filter.ScanRoot's composite
+// is split on ":" here too (a plain in-memory stand-in, not a reuse of
+// repo.go's own unexported splitScanRootFilter, mirroring how this fake
+// already stands in for the real SQL window filter above rather than
+// calling into repo.go itself).
+func (f *fakeRepo) ListEventsInWindow(ctx context.Context, start, end time.Time, filter Filter) ([]Event, error) {
+	f.windowCalls = append(f.windowCalls, windowCall{start: start, end: end, filter: filter})
 	if f.listWindowErr != nil {
 		return nil, f.listWindowErr
 	}
+
+	var scanRootInstallID, scanRootPath string
+	scanRootOK := true
+	if filter.ScanRoot != "" {
+		var found bool
+		scanRootInstallID, scanRootPath, found = strings.Cut(filter.ScanRoot, ":")
+		scanRootOK = found
+	}
+	if !scanRootOK {
+		// Malformed shape -- mirrors repo.go's own real return value
+		// (an empty slice, never a bare nil) for the same case, contract's
+		// own tolerance ("returns an empty/zero result, not an error").
+		return []Event{}, nil
+	}
+
 	var out []Event
 	for _, e := range f.events {
-		if !e.CreatedAt.Before(start) && e.CreatedAt.Before(end) {
+		if !e.CreatedAt.Before(start) && e.CreatedAt.Before(end) &&
+			(filter.Machine == "" || e.Machine == filter.Machine) &&
+			(filter.ScanRoot == "" || (e.Machine == scanRootInstallID && e.ScanRoot == scanRootPath)) {
 			out = append(out, e)
 		}
 	}
@@ -250,7 +276,7 @@ func TestService_Summary_PassesWindowBoundsRangeToRepo(t *testing.T) {
 	svc := NewService(repo)
 	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 
-	_, err := svc.Summary(context.Background(), Window5h, GroupByActor, now)
+	_, err := svc.Summary(context.Background(), Window5h, GroupByActor, Filter{}, now)
 	require.NoError(t, err)
 
 	require.Len(t, repo.windowCalls, 1)
@@ -272,15 +298,61 @@ func TestService_Summary_AggregatesOnlyEventsTheRepoReturned(t *testing.T) {
 	repo.events[1].CreatedAt = now.Add(-1 * time.Hour)
 
 	svc := NewService(repo)
-	got, err := svc.Summary(context.Background(), Window24h, GroupByActor, now)
+	got, err := svc.Summary(context.Background(), Window24h, GroupByActor, Filter{}, now)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), got.Totals.Turns)
+}
+
+// TestService_Summary_PassesFilterToRepoUnmodified is story-2/ticket-10's
+// own wiring test: Summary hands whatever Filter it was given straight
+// through to Repo.ListEventsInWindow, unmodified — the actual AND/OR
+// composition and scan_root-composite decomposition are the repo layer's
+// own job (repo_test.go's TestRepo_ListEventsInWindow_* tests), not
+// Service's.
+func TestService_Summary_PassesFilterToRepoUnmodified(t *testing.T) {
+	repo := newFakeRepo()
+	svc := NewService(repo)
+	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	filter := Filter{Machine: "install-a", ScanRoot: "install-a:/home/thw-home/.claude"}
+
+	_, err := svc.Summary(context.Background(), Window24h, GroupByActor, filter, now)
+	require.NoError(t, err)
+
+	require.Len(t, repo.windowCalls, 1)
+	assert.Equal(t, filter, repo.windowCalls[0].filter)
+}
+
+// TestService_Summary_MachineFilter_NarrowsBreakdownAndTotals is this
+// ticket's own core acceptance test at the Service layer: when Filter.
+// Machine is set, totals/breakdown are scoped to events the (fake) repo
+// itself already narrowed to that machine — the exact same "the whole
+// result is scoped, not just one panel" contract requirement, exercised
+// one layer below the real HTTP route (usage_handler_test.go covers the
+// HTTP route itself end to end).
+func TestService_Summary_MachineFilter_NarrowsBreakdownAndTotals(t *testing.T) {
+	repo := newFakeRepo()
+	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	e1 := ev("freya", "p1", "install-a", 100, 0, 0, 0, 1.0)
+	e1.CreatedAt = now.Add(-1 * time.Hour)
+	e2 := ev("nicole", "p1", "install-b", 200, 0, 0, 0, 5.0)
+	e2.CreatedAt = now.Add(-1 * time.Hour)
+	repo.events = []Event{e1, e2}
+
+	svc := NewService(repo)
+	got, err := svc.Summary(context.Background(), Window24h, GroupByActor, Filter{Machine: "install-a"}, now)
+	require.NoError(t, err)
+
+	assert.Equal(t, int64(1), got.Totals.Turns, "totals must be scoped to the filtered machine, not every event")
+	assert.Equal(t, int64(100), got.Totals.Tokens)
+	require.Len(t, got.Breakdown, 1)
+	assert.Equal(t, "freya", got.Breakdown[0].Key)
+	assert.Equal(t, int64(1), got.ReportingInstalls, "reporting_installs must also be scoped, not lifetime/unfiltered")
 }
 
 func TestService_Summary_UnknownWindow_Errors(t *testing.T) {
 	repo := newFakeRepo()
 	svc := NewService(repo)
-	_, err := svc.Summary(context.Background(), Window("fortnight"), GroupByActor, time.Now())
+	_, err := svc.Summary(context.Background(), Window("fortnight"), GroupByActor, Filter{}, time.Now())
 	assert.Error(t, err)
 }
 
@@ -288,7 +360,7 @@ func TestService_Summary_RepoError_Propagates(t *testing.T) {
 	repo := newFakeRepo()
 	repo.listWindowErr = errors.New("db down")
 	svc := NewService(repo)
-	_, err := svc.Summary(context.Background(), Window24h, GroupByActor, time.Now())
+	_, err := svc.Summary(context.Background(), Window24h, GroupByActor, Filter{}, time.Now())
 	assert.ErrorIs(t, err, repo.listWindowErr)
 }
 
@@ -301,7 +373,7 @@ func TestService_Windows_QueriesEveryFixedWindowInOrder(t *testing.T) {
 	svc := NewService(repo)
 	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 
-	rows, err := svc.Windows(context.Background(), now)
+	rows, err := svc.Windows(context.Background(), Filter{}, now)
 	require.NoError(t, err)
 
 	require.Len(t, rows, len(Windows))
@@ -311,6 +383,25 @@ func TestService_Windows_QueriesEveryFixedWindowInOrder(t *testing.T) {
 		wantStart, wantEnd, _ := WindowBounds(w, now)
 		assert.Equal(t, wantStart, repo.windowCalls[i].start, w)
 		assert.Equal(t, wantEnd, repo.windowCalls[i].end, w)
+	}
+}
+
+// TestService_Windows_PassesFilterToEveryRepoCall is story-2/ticket-10's
+// own wiring test for Windows: the same Filter must reach every one of
+// the seven per-window repo calls, not just the first — mirroring the
+// contract's own "every row of the fixed table" scoping requirement.
+func TestService_Windows_PassesFilterToEveryRepoCall(t *testing.T) {
+	repo := newFakeRepo()
+	svc := NewService(repo)
+	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	filter := Filter{Machine: "install-a", ScanRoot: "install-a:/home/thw-home/.claude"}
+
+	_, err := svc.Windows(context.Background(), filter, now)
+	require.NoError(t, err)
+
+	require.Len(t, repo.windowCalls, len(Windows))
+	for i, call := range repo.windowCalls {
+		assert.Equal(t, filter, call.filter, "window index %d", i)
 	}
 }
 
@@ -326,7 +417,7 @@ func TestService_Windows_TotalsReflectEachWindowsOwnEvents(t *testing.T) {
 	repo.events = []Event{e1, e2}
 
 	svc := NewService(repo)
-	rows, err := svc.Windows(context.Background(), now)
+	rows, err := svc.Windows(context.Background(), Filter{}, now)
 	require.NoError(t, err)
 
 	byWindow := map[Window]WindowTotals{}
@@ -341,7 +432,7 @@ func TestService_Windows_RepoError_Propagates(t *testing.T) {
 	repo := newFakeRepo()
 	repo.listWindowErr = errors.New("db down")
 	svc := NewService(repo)
-	_, err := svc.Windows(context.Background(), time.Now())
+	_, err := svc.Windows(context.Background(), Filter{}, time.Now())
 	assert.ErrorIs(t, err, repo.listWindowErr)
 }
 
@@ -391,7 +482,7 @@ func TestService_Summary_GroupByMachine_SubstitutesHostname(t *testing.T) {
 	repo.machines["install-1"] = "thw-home"
 
 	svc := NewService(repo)
-	got, err := svc.Summary(context.Background(), Window24h, GroupByMachine, now)
+	got, err := svc.Summary(context.Background(), Window24h, GroupByMachine, Filter{}, now)
 	require.NoError(t, err)
 
 	require.Len(t, got.Breakdown, 1)
@@ -411,7 +502,7 @@ func TestService_Summary_GroupByMachine_NoMachinesRow_FallsBackToInstallID(t *te
 	// Deliberately no repo.machines["install-orphan"] entry.
 
 	svc := NewService(repo)
-	got, err := svc.Summary(context.Background(), Window24h, GroupByMachine, now)
+	got, err := svc.Summary(context.Background(), Window24h, GroupByMachine, Filter{}, now)
 	require.NoError(t, err)
 
 	require.Len(t, got.Breakdown, 1)
@@ -431,7 +522,7 @@ func TestService_Summary_GroupByActor_NeverConsultsMachineHostnames(t *testing.T
 	repo.events[0].CreatedAt = now.Add(-1 * time.Hour)
 
 	svc := NewService(repo)
-	got, err := svc.Summary(context.Background(), Window24h, GroupByActor, now)
+	got, err := svc.Summary(context.Background(), Window24h, GroupByActor, Filter{}, now)
 	require.NoError(t, err)
 	assert.Equal(t, "freya", got.Breakdown[0].Key)
 }
@@ -444,7 +535,7 @@ func TestService_Summary_GroupByMachine_HostnamesRepoError_Propagates(t *testing
 	repo.events[0].CreatedAt = now.Add(-1 * time.Hour)
 
 	svc := NewService(repo)
-	_, err := svc.Summary(context.Background(), Window24h, GroupByMachine, now)
+	_, err := svc.Summary(context.Background(), Window24h, GroupByMachine, Filter{}, now)
 	assert.ErrorIs(t, err, repo.hostnamesErr)
 }
 
@@ -468,7 +559,7 @@ func TestService_Summary_GroupByPath_SubstitutesHostnameInKeyPrefix(t *testing.T
 	repo.machines["install-1"] = "thw-home"
 
 	svc := NewService(repo)
-	got, err := svc.Summary(context.Background(), Window24h, GroupByPath, now)
+	got, err := svc.Summary(context.Background(), Window24h, GroupByPath, Filter{}, now)
 	require.NoError(t, err)
 
 	require.Len(t, got.Breakdown, 1)
@@ -489,7 +580,7 @@ func TestService_Summary_GroupByPath_NoMachinesRow_LeavesRawInstallIDPrefix(t *t
 	// Deliberately no repo.machines["install-orphan"] entry.
 
 	svc := NewService(repo)
-	got, err := svc.Summary(context.Background(), Window24h, GroupByPath, now)
+	got, err := svc.Summary(context.Background(), Window24h, GroupByPath, Filter{}, now)
 	require.NoError(t, err)
 
 	require.Len(t, got.Breakdown, 1)
@@ -509,7 +600,7 @@ func TestService_Summary_GroupByPath_HostnamesRepoError_Propagates(t *testing.T)
 	repo.events[0].CreatedAt = now.Add(-1 * time.Hour)
 
 	svc := NewService(repo)
-	_, err := svc.Summary(context.Background(), Window24h, GroupByPath, now)
+	_, err := svc.Summary(context.Background(), Window24h, GroupByPath, Filter{}, now)
 	assert.ErrorIs(t, err, repo.hostnamesErr)
 }
 

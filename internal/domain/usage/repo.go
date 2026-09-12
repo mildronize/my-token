@@ -3,6 +3,7 @@ package usage
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"time"
 
 	"github.com/mildronize/my-token/internal/db"
@@ -75,7 +76,21 @@ type Repository interface {
 	// (group_by aggregation, totals, reporting_installs) is pure Go over
 	// the returned slice (summary.go's Aggregate) so it's testable
 	// without a database.
-	ListEventsInWindow(ctx context.Context, start, end time.Time) ([]Event, error)
+	//
+	// story-2/ticket-10 adds filter, AND-composed with the window bound
+	// itself: filter.Machine (raw install_id) and filter.ScanRoot (the
+	// wire's own <install_id>:<scan_root_path> composite, contract's API
+	// surface section) each narrow the result further when set, and
+	// AND-compose with each other when both are set. An empty Filter{}
+	// (both fields "") applies no additional constraint beyond the
+	// window — every existing caller before this ticket behaves exactly
+	// as before. Repo.ListEventsInWindow (repo.go) is the only place that
+	// decomposes filter.ScanRoot's composite string into the two
+	// underlying SQL arguments the query needs (splitScanRootFilter,
+	// below) — this interface still only ever hands callers the single
+	// wire-shaped Filter, matching the contract's own "shared Filter{...}
+	// struct" description of Service.Summary/Windows' own signature.
+	ListEventsInWindow(ctx context.Context, start, end time.Time, filter Filter) ([]Event, error)
 
 	// UpsertMachine writes (installID, hostname) into machines, refreshing
 	// lastSeenAt on every call regardless of whether installID already had
@@ -181,14 +196,106 @@ func (r *Repo) InsertBatch(ctx context.Context, batch []Event) (int64, error) {
 	return inserted, nil
 }
 
-// ListEventsInWindow implements Repository.ListEventsInWindow — a single
-// read query, no aggregation at this layer (summary.go's Aggregate does
-// that in Go, over whatever this returns).
-func (r *Repo) ListEventsInWindow(ctx context.Context, start, end time.Time) ([]Event, error) {
-	rows, err := r.q.ListUsageEventsInWindow(ctx, db.ListUsageEventsInWindowParams{
+// splitScanRootFilter decomposes the wire's own
+// <install_id>:<scan_root_path> composite (contract's API surface
+// section, same convention ticket 7 established for group_by=path) into
+// the two halves ListEventsInWindow's own SQL query filters on
+// separately (db/queries/usage_events.sql's scan_root_install_id/
+// scan_root_path narg pair). Pure, no database — this is this ticket's
+// own isolatable "repo-query-building logic" seam (contract's Verifiable
+// section: "no database needed for the pure half").
+//
+// ok is false when scanRoot has no ":" at all — a malformed shape.
+// ListEventsInWindow's own caller (below) treats that the same as a
+// well-formed-but-nonexistent pair: an empty/zero result, never an error
+// (contract's own tolerance) — but deliberately short-circuits before
+// ever reaching SQL, rather than composing a filter from the unparsed
+// value, so a malformed value can never accidentally match real data by
+// coincidence (e.g. a malformed scan_root string that happens to equal a
+// real install_id, with no scan_root-path constraint left to narrow it).
+func splitScanRootFilter(scanRoot string) (installID, scanRootPath string, ok bool) {
+	installID, scanRootPath, ok = strings.Cut(scanRoot, ":")
+	return installID, scanRootPath, ok
+}
+
+// nullableFilterArg converts an empty string ("no filter on this axis")
+// into a real SQL NULL for the generated narg parameter, and a non-empty
+// string into itself — sqlc's sqlite narg support types these params as
+// `interface{}` (internal/db/usage_events.sql.go), so a plain untyped nil
+// is exactly what the driver needs to see to bind SQL NULL, matching the
+// query's own "sqlc.narg(x) IS NULL OR column = sqlc.narg(x)" idiom.
+func nullableFilterArg(v string) interface{} {
+	if v == "" {
+		return nil
+	}
+	return v
+}
+
+// buildListEventsInWindowParams is ListEventsInWindow's own
+// repo-query-building step, split out as a pure function so this
+// ticket's AND-composition ("both filters set together (AND, not OR)")
+// has a seam that's unit-testable without a database (contract's
+// Verifiable section: "table-driven, constructed Event slices, no
+// database needed for the pure half" — the AND-composition itself lives
+// in this params-building step, not in a query executed against a real
+// connection, so this is where that pure test targets). ok is false
+// only when filter.ScanRoot has a malformed shape (splitScanRootFilter's
+// own doc comment) — the caller (ListEventsInWindow, below) treats that
+// as "build no query at all, return empty," never an error.
+//
+// Every field that applies is set independently of every other — there
+// is no branch here that lets one filter suppress or override another,
+// which is what actually makes the composition AND rather than OR.
+func buildListEventsInWindowParams(start, end time.Time, filter Filter) (params db.ListUsageEventsInWindowParams, ok bool) {
+	params = db.ListUsageEventsInWindowParams{
 		RangeStart: start,
 		RangeEnd:   end,
-	})
+		Machine:    nullableFilterArg(filter.Machine),
+		// ScanRootInstallID/ScanRootPath default to their zero value
+		// (nil, for an interface{} field) — SQL NULL, meaning "no
+		// scan_root filter" — unless filter.ScanRoot names one, below.
+	}
+
+	if filter.ScanRoot == "" {
+		return params, true
+	}
+
+	installID, path, splitOK := splitScanRootFilter(filter.ScanRoot)
+	if !splitOK {
+		// Malformed shape (no ":") — contract's own tolerance: the
+		// caller returns an empty result, not an error, without ever
+		// composing a partial/coincidental SQL match.
+		return db.ListUsageEventsInWindowParams{}, false
+	}
+	// Bind installID/path as literal SQL values even when a half is ""
+	// (e.g. a leading/trailing ":") rather than routing them back
+	// through nullableFilterArg — usage_events.machine/scan_root are
+	// both NOT NULL for every real row (contract's Data model), so an
+	// empty literal here matches nothing real, which is exactly this
+	// contract's own "well-formed but non-existent pair" tolerance.
+	// filter.Machine's own top-level "" is different: that "" always
+	// means "no filter at all" (nullableFilterArg, above), never a
+	// literal match target — there is no wire way to ask for
+	// `machine=""` the way an oddly-shaped scan_root can still name an
+	// empty half.
+	params.ScanRootInstallID = installID
+	params.ScanRootPath = path
+	return params, true
+}
+
+// ListEventsInWindow implements Repository.ListEventsInWindow — a single
+// read query, no aggregation at this layer (summary.go's Aggregate does
+// that in Go, over whatever this returns). story-2/ticket-10: filter is
+// translated into the query's optional SQL arguments by
+// buildListEventsInWindowParams (above, the pure half) before this ever
+// touches the real database connection.
+func (r *Repo) ListEventsInWindow(ctx context.Context, start, end time.Time, filter Filter) ([]Event, error) {
+	params, ok := buildListEventsInWindowParams(start, end, filter)
+	if !ok {
+		return []Event{}, nil
+	}
+
+	rows, err := r.q.ListUsageEventsInWindow(ctx, params)
 	if err != nil {
 		return nil, err
 	}
