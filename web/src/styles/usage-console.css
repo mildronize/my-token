@@ -193,6 +193,41 @@
   outline-offset: -2px;
 }
 
+/* story-2/ticket-11: the two new console filters (machine, scan-root) —
+   plain <select>s styled to sit alongside the pill/windowtabs cluster in
+   the top bar's own .meta row. */
+.usage-console .usagefilters {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.usage-console .usagefilters-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--uc-mono);
+  font-size: 12px;
+  color: var(--uc-text-faint);
+}
+
+.usage-console .usagefilters-field select {
+  font-family: var(--uc-mono);
+  font-size: 12px;
+  color: var(--uc-text-dim);
+  background: none;
+  border: 1px solid var(--uc-border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  max-width: 180px;
+}
+
+.usage-console .usagefilters-field select:focus-visible {
+  outline: 2px solid var(--uc-accent);
+  outline-offset: -2px;
+}
+
 /* ---------- tiles ---------- */
 .usage-console .tiles {
   display: grid;

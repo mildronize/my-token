@@ -38,6 +38,10 @@ function windowsTableBody() {
   });
 }
 
+function scanRootsBody() {
+  return JSON.stringify({ scan_roots: [] });
+}
+
 // Every /api/bff/usage/* call this page can make resolves with an empty
 // (but well-shaped) body — the point of these tests is which *URLs* got
 // called when a tab is clicked, not what the aggregated numbers are
@@ -52,6 +56,11 @@ function mockUsageFetch() {
     }
     if (url.startsWith("/api/bff/usage/summary")) {
       return new Response(emptySummaryBody(), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    // story-2/ticket-11: the scan-root filter's own option list — every
+    // load fetches this once, unfiltered.
+    if (url.startsWith("/api/bff/usage/scan-roots")) {
+      return new Response(scanRootsBody(), { status: 200, headers: { "Content-Type": "application/json" } });
     }
     throw new Error(`UsagePage.test.tsx: unexpected fetch to ${url}`);
   });
@@ -118,5 +127,177 @@ describe("UsagePage — window tabs re-scope the breakdown panels' query", () =>
     await waitFor(() => {
       expect(screen.getByRole("tab", { name: "Lifetime" })).toHaveAttribute("aria-selected", "true");
     });
+  });
+});
+
+// story-2/ticket-11: the console's two new filters (contract's "Console
+// filters" section). A single mock capable of responding differently per
+// group_by/machine/scan_root combination, so a test can assert both which
+// URLs got re-fetched AND that the rendered rows actually changed — not
+// just that a request happened.
+function jsonResponse(body: unknown) {
+  return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+}
+
+const UNFILTERED_MACHINE_ROW = { key: "thw-home", raw_key: "install-a", tokens: 100, cost: 1, turns: 2 };
+const UNFILTERED_ACTOR_ROW = { key: "freya", tokens: 100, cost: 1, turns: 2 };
+const UNFILTERED_PATH_ROW = { key: "thw-home:/home/thw-home/gits/my-task", raw_key: "install-a:/home/thw-home/gits/my-task", tokens: 100, cost: 1, turns: 2 };
+
+const NARROWED_ACTOR_ROW = { key: "narrowed-actor", tokens: 5, cost: 0.5, turns: 1 };
+const NARROWED_PATH_ROW = { key: "thw-home:/home/narrowed-project", raw_key: "install-a:/home/narrowed-project", tokens: 5, cost: 0.5, turns: 1 };
+
+function mockFilterableUsageFetch(options: { scanRoots?: unknown[] } = {}) {
+  const calledUrls: string[] = [];
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const raw = typeof input === "string" ? input : input.toString();
+    calledUrls.push(raw);
+    const url = new URL(raw, "http://localhost");
+
+    if (url.pathname === "/api/bff/usage/windows") {
+      return jsonResponse({
+        windows: ["5h", "24h", "today", "week", "month", "year", "lifetime"].map((window) => ({
+          window,
+          turns: 0,
+          tokens: 0,
+          cost: 0,
+        })),
+      });
+    }
+    if (url.pathname === "/api/bff/usage/scan-roots") {
+      return jsonResponse({ scan_roots: options.scanRoots ?? [] });
+    }
+    if (url.pathname === "/api/bff/usage/summary") {
+      const groupBy = url.searchParams.get("group_by");
+      const machine = url.searchParams.get("machine");
+      if (groupBy === "machine") {
+        // Deliberately unaffected by `machine` itself (see UsagePage.tsx's
+        // own comment) — this response also backs the filter dropdown's
+        // own option list, which must stay complete once a machine is
+        // selected, not collapse to just the selected row.
+        return jsonResponse({ totals: { tokens: 100, cost: 1, turns: 2 }, breakdown: [UNFILTERED_MACHINE_ROW], reporting_installs: 1 });
+      }
+      if (groupBy === "actor") {
+        const rows = machine ? [NARROWED_ACTOR_ROW] : [UNFILTERED_ACTOR_ROW];
+        return jsonResponse({ totals: { tokens: rows[0].tokens, cost: rows[0].cost, turns: rows[0].turns }, breakdown: rows, reporting_installs: 1 });
+      }
+      if (groupBy === "path") {
+        const rows = machine ? [NARROWED_PATH_ROW] : [UNFILTERED_PATH_ROW];
+        return jsonResponse({ totals: { tokens: rows[0].tokens, cost: rows[0].cost, turns: rows[0].turns }, breakdown: rows, reporting_installs: 1 });
+      }
+    }
+    throw new Error(`UsagePage.test.tsx: unexpected fetch to ${raw}`);
+  });
+  global.fetch = fetchMock as unknown as typeof fetch;
+  return { fetchMock, calledUrls };
+}
+
+describe("UsagePage — machine/scan-root filters (story-2/ticket-11)", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    cleanup();
+    global.fetch = originalFetch;
+    window.localStorage.clear();
+    vi.restoreAllMocks();
+  });
+
+  it("selecting a machine filter narrows all three breakdown panels' rendered rows, not just 'By machine'", async () => {
+    const { calledUrls } = mockFilterableUsageFetch();
+    renderWithClient(<UsagePage />);
+
+    // Unfiltered state first: "By actor" shows the unfiltered row.
+    await screen.findByText("freya");
+    expect(screen.getByTitle("install-a:/home/thw-home/gits/my-task")).toBeInTheDocument();
+
+    const machineSelect = await screen.findByRole("combobox", { name: "Filter by machine" });
+    await userEvent.selectOptions(machineSelect, "install-a");
+
+    // "By actor" and "By path" — the two panels that aren't "By
+    // machine" itself — both re-fetched with machine=install-a.
+    await waitFor(() => {
+      expect(calledUrls.some((u) => u.includes("group_by=actor") && u.includes("machine=install-a"))).toBe(true);
+      expect(calledUrls.some((u) => u.includes("group_by=path") && u.includes("machine=install-a"))).toBe(true);
+    });
+
+    // And their rendered rows actually changed to the narrowed data —
+    // not just that a request was fired.
+    await screen.findByText("narrowed-actor");
+    expect(screen.queryByText("freya")).not.toBeInTheDocument();
+    expect(screen.getByTitle("install-a:/home/narrowed-project")).toBeInTheDocument();
+    expect(screen.queryByTitle("install-a:/home/thw-home/gits/my-task")).not.toBeInTheDocument();
+  });
+
+  it("a selected machine filter survives a remount — restored from localStorage, applied to the very first fetch", async () => {
+    const first = mockFilterableUsageFetch();
+    const { unmount } = renderWithClient(<UsagePage />);
+
+    const machineSelect = await screen.findByRole("combobox", { name: "Filter by machine" });
+    await userEvent.selectOptions(machineSelect, "install-a");
+    await screen.findByText("narrowed-actor");
+
+    unmount();
+    cleanup();
+
+    const second = mockFilterableUsageFetch();
+    renderWithClient(<UsagePage />);
+
+    // The remounted page's very first "By actor" request already carries
+    // the persisted filter — proving it came from localStorage, not a
+    // user re-selecting it.
+    await waitFor(() => {
+      expect(second.calledUrls.some((u) => u.includes("group_by=actor") && u.includes("machine=install-a"))).toBe(true);
+    });
+    await screen.findByText("narrowed-actor");
+
+    void first;
+  });
+
+  it("a stored machine value not present in the current data falls back to 'no filter' without an error state", async () => {
+    window.localStorage.setItem("my-token.usage-console.filter.machine", "install-stale-and-gone");
+    const { calledUrls } = mockFilterableUsageFetch();
+    renderWithClient(<UsagePage />);
+
+    // The very first render optimistically includes the stale value —
+    // reconciliation only happens once the machine options list has
+    // actually loaded.
+    await screen.findByRole("combobox", { name: "Filter by machine" });
+
+    // Once the (unfiltered-by-machine) options list loads and doesn't
+    // contain the stale install_id, the filter silently resets: the
+    // dropdown falls back to "All machines" and every panel re-fetches
+    // unfiltered — never an error state.
+    await waitFor(() => {
+      const select = screen.getByRole("combobox", { name: "Filter by machine" }) as HTMLSelectElement;
+      expect(select.value).toBe("");
+    });
+    await screen.findByText("freya");
+    expect(screen.queryByText("Could not load usage data.")).not.toBeInTheDocument();
+    expect(screen.queryByText("narrowed-actor")).not.toBeInTheDocument();
+    expect(window.localStorage.getItem("my-token.usage-console.filter.machine")).toBeNull();
+
+    void calledUrls;
+  });
+
+  it("a stored scan-root value not present in the current data falls back to 'no filter' without an error state", async () => {
+    window.localStorage.setItem("my-token.usage-console.filter.scanRoot", "install-stale:~/.gone");
+    // A real, distinct scan root exists — it's simply not the stale one —
+    // so reconciliation has something concrete to compare against.
+    mockFilterableUsageFetch({
+      scanRoots: [{ install_id: "install-a", hostname: "thw-home", scan_root_path: "~/.claude", name: "main" }],
+    });
+    renderWithClient(<UsagePage />);
+
+    await screen.findByRole("combobox", { name: "Filter by scan root" });
+
+    // Once the scan-roots list loads and doesn't contain the stale
+    // composite value, the filter silently resets: the dropdown falls
+    // back to "All scan roots" — never an error state.
+    await waitFor(() => {
+      const select = screen.getByRole("combobox", { name: "Filter by scan root" }) as HTMLSelectElement;
+      expect(select.value).toBe("");
+    });
+    await screen.findByText("freya");
+    expect(screen.queryByText("Could not load usage data.")).not.toBeInTheDocument();
+    expect(window.localStorage.getItem("my-token.usage-console.filter.scanRoot")).toBeNull();
   });
 });

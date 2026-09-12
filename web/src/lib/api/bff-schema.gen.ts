@@ -120,8 +120,29 @@ export interface paths {
          * Turns/tokens/cost for each of the fixed 5h/24h/today/week/month/year/lifetime windows.
          * @description story-1/ticket-14: backs the console's time-window table — one row per fixed window, each computed the same way `getUsageSummary`'s own `window` parameter computes its range, with no `group_by` (each row is this service's whole reporting surface's totals for that window, not split by dimension).
          *     story-1/ticket-20: grows from five rows to seven — `year` and `lifetime` are now real, selectable tabs (reopening ticket 14's "lifetime is tab-only-tile, never a tab" call), so both belong in this fixed table too for consistency between what's clickable and what's listed.
+         *     story-2/ticket-10: gains the same two optional `machine`/ `scan_root` filters `getUsageSummary` already has, so the fixed table also respects an active console filter (story-1 shipped this endpoint with zero params) -- see that operation's own `machine`/`scan_root` parameter docs for the exact semantics, identical here.
          */
         get: operations["getUsageWindows"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/usage/scan-roots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every registered scan root across every reporting install.
+         * @description story-2/ticket-9: no parameters — exists purely to populate the console's future scan-root filter dropdown (ticket 11), since there is no `group_by=scan_root` breakdown panel this story's scope adds to derive the list from otherwise. Each row joins `scan_roots` to `machines` on `install_id` for the hostname, the same join style `getUsageSummary`'s own hostname substitution already uses (read via a repo method, not a SQL JOIN, per that same precedent) — `hostname` falls back to the raw `install_id` itself if a scan root's install_id has no corresponding `machines` row (shouldn't normally happen given both are upserted from the same ingestion batch, but the same "never a blank label" rule `getUsageSummary`'s own `machine`/`path` group_by fallback already sets applies here too).
+         */
+        get: operations["getUsageScanRoots"];
         put?: never;
         post?: never;
         delete?: never;
@@ -206,6 +227,21 @@ export interface components {
         };
         UsageWindows: {
             windows: components["schemas"]["UsageWindowRow"][];
+        };
+        /** @description story-2/ticket-9: one row of GET /usage/scan-roots. Field names are snake_case verbatim from the contract's own API surface section, matching the rest of this usage domain's own break from this spec's otherwise-camelCase convention (see getUsageSummary's own doc comment for why). */
+        UsageScanRoot: {
+            /** @description The reporting install's raw install_id — always present, even when hostname had to fall back to it. */
+            install_id: string;
+            /** @description machines.hostname for this row's install_id, falling back to the raw install_id itself if no corresponding machines row exists (never a blank label). */
+            hostname: string;
+            /** @description The raw scan-root path, as configured in the collector's own scan_paths. */
+            scan_root_path: string;
+            /** @description The operator-assigned label for this scan root (per-install, no shared/global naming registry across machines). */
+            name: string;
+        };
+        UsageScanRootList: {
+            /** @description Every registered scan root across every reporting install. */
+            scan_roots: components["schemas"]["UsageScanRoot"][];
         };
         Error: {
             error: {
@@ -341,6 +377,10 @@ export interface operations {
             query: {
                 window: "5h" | "24h" | "today" | "week" | "month" | "year" | "lifetime";
                 group_by: "actor" | "path" | "machine";
+                /** @description story-2/ticket-10: optional install_id filter. When set, scopes `totals`/`breakdown`/`reporting_installs` to only events reported by this machine -- not just one panel's own dimension (contract's Console filters section: global, not per-panel). AND-composed with `window` and with `scan_root` when both are set. Absent means no machine constraint. */
+                machine?: string;
+                /** @description story-2/ticket-10: optional composite `<install_id>:<scan_root_path>` filter -- same machine-prefix convention as `group_by=path`'s own cross-machine fix (ticket 7), for the identical reason: a bare scan-root path/name is ambiguous across machines since naming is per-install (contract's Data model). AND-composed with `window` and with `machine` when both are set. An invalid shape, or a well-formed but non-existent `install_id:scan_root_path` pair, yields an empty/zero result -- not a 400 -- mirroring this API's existing "no matching data" tolerance versus a malformed request. */
+                scan_root?: string;
             };
             header?: never;
             path?: never;
@@ -363,7 +403,12 @@ export interface operations {
     };
     getUsageWindows: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description story-2/ticket-10 -- same optional install_id filter as getUsageSummary's own `machine` parameter. */
+                machine?: string;
+                /** @description story-2/ticket-10 -- same optional `<install_id>:<scan_root_path>` filter as getUsageSummary's own `scan_root` parameter. */
+                scan_root?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -377,6 +422,27 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UsageWindows"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    getUsageScanRoots: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every registered scan root, across every reporting install. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageScanRootList"];
                 };
             };
             401: components["responses"]["Unauthorized"];
