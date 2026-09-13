@@ -16,6 +16,19 @@ func writeFile(t *testing.T, path, content string) {
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 }
 
+// scannedPaths extracts just the discovered file paths from a
+// []ScannedFile result, sorted, for tests that don't care about
+// scan-root attribution.
+func scannedPaths(t *testing.T, files []ScannedFile) []string {
+	t.Helper()
+	paths := make([]string, len(files))
+	for i, f := range files {
+		paths[i] = f.Path
+	}
+	sort.Strings(paths)
+	return paths
+}
+
 // TestFindTranscriptFiles_IncludesNestedSubagentTranscripts is ticket 9/10's
 // own regression: "a non-recursive scan silently drops subagent usage" —
 // asserts a *.jsonl file nested under <session-uuid>/subagents/agent-*.jsonl
@@ -30,13 +43,18 @@ func TestFindTranscriptFiles_IncludesNestedSubagentTranscripts(t *testing.T) {
 	writeFile(t, subagentFile, "{}\n")
 	writeFile(t, nonJSONL, "{}\n")
 
-	got, err := FindTranscriptFiles([]string{root})
+	got, err := FindTranscriptFiles([]ScanPath{{Name: "main", Path: root, SourceType: "claude_code"}})
 	require.NoError(t, err)
-	sort.Strings(got)
+	paths := scannedPaths(t, got)
 
-	require.Len(t, got, 2, "must find both the top-level session file and the nested subagent file, and skip the .meta.json")
-	require.Contains(t, got, sessionFile)
-	require.Contains(t, got, subagentFile)
+	require.Len(t, paths, 2, "must find both the top-level session file and the nested subagent file, and skip the .meta.json")
+	require.Contains(t, paths, sessionFile)
+	require.Contains(t, paths, subagentFile)
+	for _, f := range got {
+		assert.Equal(t, root, f.ScanRoot)
+		assert.Equal(t, "main", f.Name)
+		assert.Equal(t, "claude_code", f.SourceType)
+	}
 }
 
 // TestFindTranscriptFiles_MultipleScanPaths covers the goal's own
@@ -50,13 +68,25 @@ func TestFindTranscriptFiles_MultipleScanPaths(t *testing.T) {
 	writeFile(t, fileA, "{}\n")
 	writeFile(t, fileB, "{}\n")
 
-	got, err := FindTranscriptFiles([]string{rootA, rootB})
+	got, err := FindTranscriptFiles([]ScanPath{
+		{Name: "main", Path: rootA, SourceType: "claude_code"},
+		{Name: "backup-install", Path: rootB, SourceType: "claude_code"},
+	})
 	require.NoError(t, err)
-	sort.Strings(got)
+	paths := scannedPaths(t, got)
 
-	require.Len(t, got, 2)
-	require.Contains(t, got, fileA)
-	require.Contains(t, got, fileB)
+	require.Len(t, paths, 2)
+	require.Contains(t, paths, fileA)
+	require.Contains(t, paths, fileB)
+
+	byPath := map[string]ScannedFile{}
+	for _, f := range got {
+		byPath[f.Path] = f
+	}
+	assert.Equal(t, "main", byPath[fileA].Name, "story-2/ticket-8: each discovered file is attributed to its own ScanPath entry")
+	assert.Equal(t, rootA, byPath[fileA].ScanRoot)
+	assert.Equal(t, "backup-install", byPath[fileB].Name)
+	assert.Equal(t, rootB, byPath[fileB].ScanRoot)
 }
 
 // TestFindTranscriptFiles_MissingScanPathIsNotFatal — a configured scan
@@ -67,10 +97,13 @@ func TestFindTranscriptFiles_MissingScanPathIsNotFatal(t *testing.T) {
 	fileA := filepath.Join(root, "a.jsonl")
 	writeFile(t, fileA, "{}\n")
 
-	got, err := FindTranscriptFiles([]string{filepath.Join(root, "does-not-exist"), root})
+	got, err := FindTranscriptFiles([]ScanPath{
+		{Name: "missing", Path: filepath.Join(root, "does-not-exist"), SourceType: "claude_code"},
+		{Name: "main", Path: root, SourceType: "claude_code"},
+	})
 	require.NoError(t, err)
 	require.Len(t, got, 1)
-	require.Contains(t, got, fileA)
+	require.Equal(t, fileA, got[0].Path)
 }
 
 // TestFindTranscriptFiles_ExpandsLeadingTilde — the goal and ticket 12
@@ -86,10 +119,26 @@ func TestFindTranscriptFiles_ExpandsLeadingTilde(t *testing.T) {
 	fileUnderHome := filepath.Join(fakeHome, ".claude", "projects", "a.jsonl")
 	writeFile(t, fileUnderHome, "{}\n")
 
-	got, err := FindTranscriptFiles([]string{"~/.claude"})
+	got, err := FindTranscriptFiles([]ScanPath{{Name: "main", Path: "~/.claude", SourceType: "claude_code"}})
 	require.NoError(t, err)
 	require.Len(t, got, 1)
-	require.Contains(t, got, fileUnderHome)
+	assert.Equal(t, fileUnderHome, got[0].Path)
+	assert.Equal(t, filepath.Join(fakeHome, ".claude"), got[0].ScanRoot, "ScanRoot is the entry's *resolved* Path — expandHome already applied")
+}
+
+// TestFindTranscriptFiles_DefaultsMissingSourceType proves the defensive
+// default in FindTranscriptFiles itself (config.go's LoadOrInitConfig
+// already applies the same default when loading from disk — this covers
+// a caller that builds a ScanPath by hand, e.g. this test, without going
+// through LoadOrInitConfig).
+func TestFindTranscriptFiles_DefaultsMissingSourceType(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "a.jsonl"), "{}\n")
+
+	got, err := FindTranscriptFiles([]ScanPath{{Name: "main", Path: root}})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, DefaultSourceType, got[0].SourceType)
 }
 
 func TestExpandHome(t *testing.T) {

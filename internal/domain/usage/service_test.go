@@ -39,6 +39,14 @@ type fakeRepo struct {
 	upsertMachineErr  error
 	hostnamesErr      error
 	upsertMachineCall []upsertMachineCall
+
+	// scanRoots is UpsertScanRoot's own in-memory store, keyed by
+	// installID+"|"+scanRootPath — a plain map stand-in for the real
+	// INSERT OR REPLACE upsert (repo_test.go proves that against a real
+	// database), mirroring machines above.
+	scanRoots          map[string]scanRootRecord
+	upsertScanRootErr  error
+	upsertScanRootCall []upsertScanRootCall
 }
 
 type upsertMachineCall struct {
@@ -46,12 +54,22 @@ type upsertMachineCall struct {
 	lastSeenAt          time.Time
 }
 
+type scanRootRecord struct {
+	name, sourceType string
+	lastSeenAt       time.Time
+}
+
+type upsertScanRootCall struct {
+	installID, scanRootPath, name, sourceType string
+	lastSeenAt                                time.Time
+}
+
 type windowCall struct {
 	start, end time.Time
 }
 
 func newFakeRepo() *fakeRepo {
-	return &fakeRepo{insertedIDs: map[string]bool{}, machines: map[string]string{}}
+	return &fakeRepo{insertedIDs: map[string]bool{}, machines: map[string]string{}, scanRoots: map[string]scanRootRecord{}}
 }
 
 func (f *fakeRepo) InsertBatch(ctx context.Context, batch []Event) (int64, error) {
@@ -106,6 +124,17 @@ func (f *fakeRepo) MachineHostnames(ctx context.Context) (map[string]string, err
 		out[k] = v
 	}
 	return out, nil
+}
+
+func (f *fakeRepo) UpsertScanRoot(ctx context.Context, installID, scanRootPath, name, sourceType string, lastSeenAt time.Time) error {
+	f.upsertScanRootCall = append(f.upsertScanRootCall, upsertScanRootCall{
+		installID: installID, scanRootPath: scanRootPath, name: name, sourceType: sourceType, lastSeenAt: lastSeenAt,
+	})
+	if f.upsertScanRootErr != nil {
+		return f.upsertScanRootErr
+	}
+	f.scanRoots[installID+"|"+scanRootPath] = scanRootRecord{name: name, sourceType: sourceType, lastSeenAt: lastSeenAt}
+	return nil
 }
 
 func TestService_IngestBatch_ComputesCostAndSetsSource_NeverFromCaller(t *testing.T) {
@@ -400,6 +429,54 @@ func TestService_Summary_GroupByMachine_HostnamesRepoError_Propagates(t *testing
 	svc := NewService(repo)
 	_, err := svc.Summary(context.Background(), Window24h, GroupByMachine, now)
 	assert.ErrorIs(t, err, repo.hostnamesErr)
+}
+
+// --- Service.UpsertScanRoots (story-2/ticket-8) -------------------------
+
+// TestService_UpsertScanRoots_DelegatesEachEntryToRepoWithNow proves
+// UpsertScanRoots is a thin pass-through to Repo.UpsertScanRoot, once per
+// entry of the batch's own scan_roots array, carrying the caller-supplied
+// `now` straight through as last_seen_at for every entry — mirrors
+// TestService_UpsertMachine_DelegatesToRepoWithNow. The real
+// upsert-overwrites-not-insert-once behavior against a real database is
+// this ticket's own explicitly-called-out test, proven in repo_test.go
+// instead (a fake map can't demonstrate a real SQL upsert).
+func TestService_UpsertScanRoots_DelegatesEachEntryToRepoWithNow(t *testing.T) {
+	repo := newFakeRepo()
+	svc := NewService(repo)
+	now := time.Date(2026, 9, 10, 8, 0, 0, 0, time.UTC)
+
+	err := svc.UpsertScanRoots(context.Background(), "install-1", []UpsertScanRootInput{
+		{Path: "/home/thw-home/.claude", Name: "main", SourceType: "claude_code"},
+		{Path: "/home/thw-home/.claude-local", Name: "backup-install", SourceType: "claude_code"},
+	}, now)
+	require.NoError(t, err)
+
+	require.Len(t, repo.upsertScanRootCall, 2)
+	assert.Equal(t, upsertScanRootCall{
+		installID: "install-1", scanRootPath: "/home/thw-home/.claude", name: "main", sourceType: "claude_code", lastSeenAt: now,
+	}, repo.upsertScanRootCall[0])
+	assert.Equal(t, upsertScanRootCall{
+		installID: "install-1", scanRootPath: "/home/thw-home/.claude-local", name: "backup-install", sourceType: "claude_code", lastSeenAt: now,
+	}, repo.upsertScanRootCall[1])
+}
+
+func TestService_UpsertScanRoots_EmptyArray_NoOp(t *testing.T) {
+	repo := newFakeRepo()
+	svc := NewService(repo)
+
+	err := svc.UpsertScanRoots(context.Background(), "install-1", nil, time.Now())
+	require.NoError(t, err)
+	assert.Empty(t, repo.upsertScanRootCall)
+}
+
+func TestService_UpsertScanRoots_RepoError_Propagates(t *testing.T) {
+	repo := newFakeRepo()
+	repo.upsertScanRootErr = errors.New("db down")
+	svc := NewService(repo)
+
+	err := svc.UpsertScanRoots(context.Background(), "install-1", []UpsertScanRootInput{{Path: "/x", Name: "main", SourceType: "claude_code"}}, time.Now())
+	assert.ErrorIs(t, err, repo.upsertScanRootErr)
 }
 
 // --- Service.Summary group_by=path: hostname substitution in the

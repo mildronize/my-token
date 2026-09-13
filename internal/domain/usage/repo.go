@@ -20,12 +20,17 @@ import (
 // trusts the client) — Repo itself has no opinion on how they were
 // derived, it only ever writes whatever Event it's given.
 type Event struct {
-	ID                       string
-	SessionID                string
-	Actor                    string
-	Path                     string
-	Machine                  string
-	Model                    string
+	ID        string
+	SessionID string
+	Actor     string
+	Path      string
+	Machine   string
+	Model     string
+	// ScanRoot is the raw, resolved scan-root path the reporting
+	// transcript file was found under (story-2/ticket-8, contract's Data
+	// model) — distinct from Path, which is git-rooted from touched
+	// files (ticket 13), not the transcript's own location.
+	ScanRoot                 string
 	InputTokens              int64
 	OutputTokens             int64
 	CacheReadInputTokens     int64
@@ -74,6 +79,17 @@ type Repository interface {
 	// what "no entry" means (fall back to the raw install_id), not this
 	// method.
 	MachineHostnames(ctx context.Context) (map[string]string, error)
+
+	// UpsertScanRoot writes (installID, scanRootPath, name, sourceType)
+	// into scan_roots, refreshing lastSeenAt on every call regardless of
+	// whether the (installID, scanRootPath) pair already had a row —
+	// story-2/ticket-8: called once per entry of every ingestion batch's
+	// own scan_roots array (Service.UpsertScanRoots) so a renamed scan
+	// root's console label catches up rather than staying stuck on
+	// whatever name it was first seen with (contract's Data model:
+	// `scan_roots`), mirroring UpsertMachine's own upsert-on-every-batch
+	// design.
+	UpsertScanRoot(ctx context.Context, installID, scanRootPath, name, sourceType string, lastSeenAt time.Time) error
 }
 
 // Repo is the only type in this package that imports the sqlc-generated
@@ -116,6 +132,7 @@ func (r *Repo) InsertBatch(ctx context.Context, batch []Event) (int64, error) {
 			Path:                     e.Path,
 			Machine:                  e.Machine,
 			Model:                    e.Model,
+			ScanRoot:                 e.ScanRoot,
 			InputTokens:              e.InputTokens,
 			OutputTokens:             e.OutputTokens,
 			CacheReadInputTokens:     e.CacheReadInputTokens,
@@ -160,6 +177,7 @@ func (r *Repo) ListEventsInWindow(ctx context.Context, start, end time.Time) ([]
 			Path:                     row.Path,
 			Machine:                  row.Machine,
 			Model:                    row.Model,
+			ScanRoot:                 row.ScanRoot,
 			InputTokens:              row.InputTokens,
 			OutputTokens:             row.OutputTokens,
 			CacheReadInputTokens:     row.CacheReadInputTokens,
@@ -197,4 +215,21 @@ func (r *Repo) MachineHostnames(ctx context.Context) (map[string]string, error) 
 		out[row.InstallID] = row.Hostname
 	}
 	return out, nil
+}
+
+// UpsertScanRoot implements Repository.UpsertScanRoot over the
+// sqlc-generated UpsertScanRoot query (db/queries/scan_roots.sql) — a
+// real upsert (INSERT OR REPLACE on the (install_id, scan_root_path)
+// composite primary key), not an insert-once: a second call for the
+// same pair with a different name overwrites the stored value rather
+// than leaving the first-seen one in place — mirrors UpsertMachine
+// above.
+func (r *Repo) UpsertScanRoot(ctx context.Context, installID, scanRootPath, name, sourceType string, lastSeenAt time.Time) error {
+	return r.q.UpsertScanRoot(ctx, db.UpsertScanRootParams{
+		InstallID:    installID,
+		ScanRootPath: scanRootPath,
+		Name:         name,
+		SourceType:   sourceType,
+		LastSeenAt:   lastSeenAt,
+	})
 }

@@ -25,6 +25,14 @@ type Machine struct {
 	LastSeenAt time.Time `json:"last_seen_at"`
 }
 
+type ScanRoot struct {
+	InstallID    string    `json:"install_id"`
+	ScanRootPath string    `json:"scan_root_path"`
+	Name         string    `json:"name"`
+	SourceType   string    `json:"source_type"`
+	LastSeenAt   time.Time `json:"last_seen_at"`
+}
+
 type UsageEvent struct {
 	ID                       string    `json:"id"`
 	SessionID                string    `json:"session_id"`
@@ -39,6 +47,7 @@ type UsageEvent struct {
 	Cost                     float64   `json:"cost"`
 	Source                   string    `json:"source"`
 	CreatedAt                time.Time `json:"created_at"`
+	ScanRoot                 string    `json:"scan_root"`
 }
 
 type User struct {
