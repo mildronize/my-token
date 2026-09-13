@@ -126,11 +126,16 @@ func decodeUsageScanRootList(t *testing.T, rec *httptest.ResponseRecorder) bffap
 // usage.Repo/usage.Service's own UpsertScanRoot path) — mirrors
 // seedMachine's own reasoning (above): these tests shouldn't need to
 // trust a second package's write path just to set up a fixture.
-func seedScanRoot(t *testing.T, conn *sql.DB, installID, scanRootPath, name string, lastSeenAt time.Time) {
+//
+// story-3/ticket-2: sourceType is now an explicit parameter (was
+// hardcoded 'claude_code') so callers can assert GetUsageScanRoots'
+// wire response carries source_type through correctly, including a
+// non-default value.
+func seedScanRoot(t *testing.T, conn *sql.DB, installID, scanRootPath, name, sourceType string, lastSeenAt time.Time) {
 	t.Helper()
 	_, err := conn.Exec(
-		`INSERT INTO scan_roots (install_id, scan_root_path, name, source_type, last_seen_at) VALUES (?, ?, ?, 'claude_code', ?)`,
-		installID, scanRootPath, name, lastSeenAt,
+		`INSERT INTO scan_roots (install_id, scan_root_path, name, source_type, last_seen_at) VALUES (?, ?, ?, ?, ?)`,
+		installID, scanRootPath, name, sourceType, lastSeenAt,
 	)
 	require.NoError(t, err)
 }
@@ -687,24 +692,28 @@ func TestGetUsageWindows_MissingSession_Unauthorized(t *testing.T) {
 // ticket's own core acceptance test: machines + scan_roots rows seeded
 // across two install_ids, every row comes back with correct hostname
 // joins.
+//
+// story-3/ticket-2: also asserts source_type comes back verbatim — two
+// distinct values seeded (not both "claude_code") so the assertion can't
+// pass by coincidence if source_type were left unmapped/zeroed.
 func TestGetUsageScanRoots_ReturnsEveryRootAcrossTwoInstalls(t *testing.T) {
 	router, session, conn := newBFFRouterForUsage(t)
 	now := time.Now().UTC()
 
 	seedMachine(t, conn, "install-a", "thw-home", now)
 	seedMachine(t, conn, "install-b", "thw-laptop", now)
-	seedScanRoot(t, conn, "install-a", "/home/thw-home/.claude", "main", now)
-	seedScanRoot(t, conn, "install-a", "/home/thw-home/.claude-local", "backup-install", now)
-	seedScanRoot(t, conn, "install-b", "/home/laptop/.claude", "main", now)
+	seedScanRoot(t, conn, "install-a", "/home/thw-home/.claude", "main", "claude_code", now)
+	seedScanRoot(t, conn, "install-a", "/home/thw-home/.claude-local", "backup-install", "codex", now)
+	seedScanRoot(t, conn, "install-b", "/home/laptop/.claude", "main", "claude_code", now)
 
 	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/usage/scan-roots", session, nil)
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 
 	got := decodeUsageScanRootList(t, rec)
 	assert.ElementsMatch(t, []bffapi.UsageScanRoot{
-		{InstallId: "install-a", Hostname: "thw-home", ScanRootPath: "/home/thw-home/.claude", Name: "main"},
-		{InstallId: "install-a", Hostname: "thw-home", ScanRootPath: "/home/thw-home/.claude-local", Name: "backup-install"},
-		{InstallId: "install-b", Hostname: "thw-laptop", ScanRootPath: "/home/laptop/.claude", Name: "main"},
+		{InstallId: "install-a", Hostname: "thw-home", ScanRootPath: "/home/thw-home/.claude", Name: "main", SourceType: "claude_code"},
+		{InstallId: "install-a", Hostname: "thw-home", ScanRootPath: "/home/thw-home/.claude-local", Name: "backup-install", SourceType: "codex"},
+		{InstallId: "install-b", Hostname: "thw-laptop", ScanRootPath: "/home/laptop/.claude", Name: "main", SourceType: "claude_code"},
 	}, got.ScanRoots)
 }
 
@@ -717,7 +726,7 @@ func TestGetUsageScanRoots_NoMachinesRow_FallsBackToInstallID(t *testing.T) {
 	now := time.Now().UTC()
 
 	// Deliberately no seedMachine call for "install-orphan".
-	seedScanRoot(t, conn, "install-orphan", "/home/thw-home/.claude", "main", now)
+	seedScanRoot(t, conn, "install-orphan", "/home/thw-home/.claude", "main", "claude_code", now)
 
 	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/usage/scan-roots", session, nil)
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
@@ -726,6 +735,7 @@ func TestGetUsageScanRoots_NoMachinesRow_FallsBackToInstallID(t *testing.T) {
 	require.Len(t, got.ScanRoots, 1)
 	assert.Equal(t, "install-orphan", got.ScanRoots[0].Hostname, "must fall back to the raw install_id, never a blank hostname")
 	assert.Equal(t, "install-orphan", got.ScanRoots[0].InstallId)
+	assert.Equal(t, "claude_code", got.ScanRoots[0].SourceType)
 }
 
 // TestGetUsageScanRoots_NoScanRoots_EmptyArray proves the zero-registered

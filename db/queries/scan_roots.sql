@@ -33,4 +33,8 @@ VALUES (?, ?, ?, ?, ?);
 -- as a SQL JOIN here -- same reasoning ListMachines' own doc comment
 -- gives: reuse the pure aggregation/substitution logic that already
 -- exists rather than re-deriving a join in SQL.
-SELECT install_id, scan_root_path, name FROM scan_roots;
+--
+-- story-3/ticket-2: also selects source_type -- already a real column
+-- (story-2/ticket-8), just never selected here since ticket-9 only
+-- needed this query for the filter dropdown, which doesn't display it.
+SELECT install_id, scan_root_path, name, source_type FROM scan_roots;

@@ -493,13 +493,18 @@ components:
     UsageScanRoot:
       type: object
       additionalProperties: false
-      required: [install_id, hostname, scan_root_path, name]
+      required: [install_id, hostname, scan_root_path, name, source_type]
       description: >
         story-2/ticket-9: one row of GET /usage/scan-roots. Field names
         are snake_case verbatim from the contract's own API surface
         section, matching the rest of this usage domain's own break from
         this spec's otherwise-camelCase convention (see getUsageSummary's
-        own doc comment for why).
+        own doc comment for why). story-3/ticket-2 adds `source_type`,
+        additive to ticket-9's own shape (already a real column on
+        `scan_roots` — story-2/ticket-8 — just never selected/exposed
+        here since ticket-9 only needed this endpoint for the filter
+        dropdown, which doesn't display it); no existing consumer needs
+        to change.
       properties:
         install_id:
           type: string
@@ -516,6 +521,14 @@ components:
         name:
           type: string
           description: The operator-assigned label for this scan root (per-install, no shared/global naming registry across machines).
+        source_type:
+          type: string
+          description: >
+            A declared category at config time (defaults to
+            "claude_code" if the collector's own config omitted it) —
+            same value ingested via the batch's own `scan_roots[].
+            source_type` (openapi.yaml's `ScanRootInput`), read back
+            verbatim here (story-3/ticket-2).
     UsageScanRootList:
       type: object
       additionalProperties: false
