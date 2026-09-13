@@ -478,3 +478,68 @@ func TestService_UpsertScanRoots_RepoError_Propagates(t *testing.T) {
 	err := svc.UpsertScanRoots(context.Background(), "install-1", []UpsertScanRootInput{{Path: "/x", Name: "main", SourceType: "claude_code"}}, time.Now())
 	assert.ErrorIs(t, err, repo.upsertScanRootErr)
 }
+
+// --- Service.Summary group_by=path: hostname substitution in the
+// machine-prefixed key (story-2/ticket-7) -------------------------------
+// Mirrors the group_by=machine substitution tests above — the contract's
+// own "Integration/service test" acceptance criterion: Service.Summary
+// with group_by=path returns Key/RawKey in the <hostname>:<path> /
+// <install_id>:<path> shape.
+
+// TestService_Summary_GroupByPath_SubstitutesHostnameInKeyPrefix is this
+// ticket's own core acceptance criterion for the read side: group_by=path's
+// breakdown key comes back as `<hostname>:<path>`, not the raw
+// `<install_id>:<path>` Aggregate originally grouped by — and RawKey
+// carries that raw key so the console can still show it via tooltip.
+func TestService_Summary_GroupByPath_SubstitutesHostnameInKeyPrefix(t *testing.T) {
+	repo := newFakeRepo()
+	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	repo.events = []Event{ev("freya", "/gits/my-token", "install-1", 100, 0, 0, 0, 1.0)}
+	repo.events[0].CreatedAt = now.Add(-1 * time.Hour)
+	repo.machines["install-1"] = "thw-home"
+
+	svc := NewService(repo)
+	got, err := svc.Summary(context.Background(), Window24h, GroupByPath, now)
+	require.NoError(t, err)
+
+	require.Len(t, got.Breakdown, 1)
+	assert.Equal(t, "thw-home:/gits/my-token", got.Breakdown[0].Key, "key's install_id prefix must be substituted for the hostname, path suffix untouched")
+	assert.Equal(t, "install-1:/gits/my-token", got.Breakdown[0].RawKey, "the raw install_id:path must still be reachable")
+}
+
+// TestService_Summary_GroupByPath_NoMachinesRow_LeavesRawInstallIDPrefix
+// mirrors the group_by=machine no-machines-row fallback: a machine with
+// usage_events rows but no corresponding machines row must never produce
+// a blank/null key — the raw `install_id:path` key stays exactly as
+// Aggregate produced it.
+func TestService_Summary_GroupByPath_NoMachinesRow_LeavesRawInstallIDPrefix(t *testing.T) {
+	repo := newFakeRepo()
+	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	repo.events = []Event{ev("freya", "/gits/my-token", "install-orphan", 100, 0, 0, 0, 1.0)}
+	repo.events[0].CreatedAt = now.Add(-1 * time.Hour)
+	// Deliberately no repo.machines["install-orphan"] entry.
+
+	svc := NewService(repo)
+	got, err := svc.Summary(context.Background(), Window24h, GroupByPath, now)
+	require.NoError(t, err)
+
+	require.Len(t, got.Breakdown, 1)
+	assert.Equal(t, "install-orphan:/gits/my-token", got.Breakdown[0].Key, "must fall back to the raw install_id:path, never a blank key")
+	assert.Empty(t, got.Breakdown[0].RawKey, "no substitution happened, so there is no separate raw value")
+}
+
+// TestService_Summary_GroupByActor_NeverConsultsMachineHostnames (above)
+// already proves the substitution pass doesn't run for group_by=actor;
+// this proves group_by=path's own MachineHostnames call errors propagate,
+// the same as group_by=machine's own equivalent test does.
+func TestService_Summary_GroupByPath_HostnamesRepoError_Propagates(t *testing.T) {
+	repo := newFakeRepo()
+	repo.hostnamesErr = errors.New("db down")
+	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	repo.events = []Event{ev("freya", "/gits/my-token", "install-1", 100, 0, 0, 0, 1.0)}
+	repo.events[0].CreatedAt = now.Add(-1 * time.Hour)
+
+	svc := NewService(repo)
+	_, err := svc.Summary(context.Background(), Window24h, GroupByPath, now)
+	assert.ErrorIs(t, err, repo.hostnamesErr)
+}

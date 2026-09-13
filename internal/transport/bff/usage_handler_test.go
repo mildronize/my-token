@@ -126,11 +126,16 @@ func TestGetUsageSummary_GroupsAndTotalsMatchSeededRows(t *testing.T) {
 }
 
 // TestGetUsageSummary_GroupByPath proves group_by actually switches the
-// breakdown dimension, not just the query string.
+// breakdown dimension, not just the query string. story-2/ticket-7 makes
+// group_by=path's key machine-prefixed (`<hostname>:<path>` once
+// substituted, `<install_id>:<path>` raw) — both events here share the
+// same machine, so they still collapse into one row, just with the new
+// key shape.
 func TestGetUsageSummary_GroupByPath(t *testing.T) {
 	router, session, conn := newBFFRouterForUsage(t)
 	now := time.Now().UTC()
 
+	seedMachine(t, conn, "install-a", "thw-home", now)
 	seedUsageEvent(t, conn, "e1", "freya", "/gits/my-task", "install-a", 100, 1.0, now.Add(-1*time.Hour))
 	seedUsageEvent(t, conn, "e2", "nicole", "/gits/my-task", "install-a", 100, 1.0, now.Add(-1*time.Hour))
 
@@ -138,9 +143,35 @@ func TestGetUsageSummary_GroupByPath(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 
 	got := decodeUsageSummary(t, rec)
-	require.Len(t, got.Breakdown, 1, "both events share the same path — group_by=path collapses them into one row")
-	assert.Equal(t, "/gits/my-task", got.Breakdown[0].Key)
+	require.Len(t, got.Breakdown, 1, "both events share the same path AND the same machine — group_by=path collapses them into one row")
+	assert.Equal(t, "thw-home:/gits/my-task", got.Breakdown[0].Key, "key's install_id prefix substituted for the hostname")
+	require.NotNil(t, got.Breakdown[0].RawKey)
+	assert.Equal(t, "install-a:/gits/my-task", *got.Breakdown[0].RawKey)
 	assert.Equal(t, int64(2), got.Breakdown[0].Turns)
+}
+
+// TestGetUsageSummary_GroupByPath_CrossMachineIdenticalPath_DoesNotMerge
+// is story-2/ticket-7's own HTTP-level regression test for the false-merge
+// bug story-1 documented and deferred (contract's "Cross-machine path
+// identity" section): the exact same literal path reported by two
+// different machines must produce two distinct group_by=path rows, not
+// one silently merged row.
+func TestGetUsageSummary_GroupByPath_CrossMachineIdenticalPath_DoesNotMerge(t *testing.T) {
+	router, session, conn := newBFFRouterForUsage(t)
+	now := time.Now().UTC()
+
+	seedMachine(t, conn, "install-a", "thw-home", now)
+	seedMachine(t, conn, "install-b", "thw-laptop", now)
+	seedUsageEvent(t, conn, "e1", "freya", "/gits/my-task", "install-a", 100, 1.0, now.Add(-1*time.Hour))
+	seedUsageEvent(t, conn, "e2", "nicole", "/gits/my-task", "install-b", 100, 3.0, now.Add(-1*time.Hour))
+
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/usage/summary?window=24h&group_by=path", session, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	got := decodeUsageSummary(t, rec)
+	require.Len(t, got.Breakdown, 2, "the same literal path from two different machines must not merge into one row")
+	assert.Equal(t, "thw-laptop:/gits/my-task", got.Breakdown[0].Key, "higher cost first")
+	assert.Equal(t, "thw-home:/gits/my-task", got.Breakdown[1].Key)
 }
 
 // TestGetUsageSummary_GroupByMachine_ReturnsHostnamesNotUUIDs is this

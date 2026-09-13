@@ -117,9 +117,12 @@ func TestCollectorIntegration_RunsAgainstTicket11sRealEndpoint(t *testing.T) {
 
 	assert.Equal(t, 3, countUsageEventRows(t, conn), "3 real rows landed in the real usage_events table via a real HTTP POST")
 
-	assertRow(t, conn, "msg_turn1", "freya", int64(100), int64(50), int64(10), int64(5))
-	assertRow(t, conn, "msg_turn2", "freya", int64(200), int64(80), int64(0), int64(0))
-	assertRow(t, conn, "msg_subagent1", "freya", int64(30), int64(15), int64(0), int64(0))
+	// story-2/ticket-7: actor is now the raw launch cwd, verbatim — no
+	// `.typ-crews/<name>` pattern match anymore.
+	const wantActor = "/home/thw-home/.typ-crews/freya"
+	assertRow(t, conn, "msg_turn1", wantActor, int64(100), int64(50), int64(10), int64(5))
+	assertRow(t, conn, "msg_turn2", wantActor, int64(200), int64(80), int64(0), int64(0))
+	assertRow(t, conn, "msg_subagent1", wantActor, int64(30), int64(15), int64(0), int64(0))
 
 	// path falls back to the raw cwd (not a git repo): the fixture's own
 	// cwd, "/home/thw-home/.typ-crews/freya" — proves the simple method's

@@ -48,3 +48,94 @@ describe("BreakdownPanel — group_by=machine", () => {
     expect(label).toHaveAttribute("title", "install-orphan");
   });
 });
+
+// story-2/ticket-7: group_by=path's key is now machine-prefixed
+// (`<hostname>:<path>` once the BFF substitutes it,
+// `<install_id>:<path>` raw) — internal/domain/usage/summary.go's
+// keyFor(GroupByPath) + service.go's substituteMachineHostnamesInPathKeys.
+describe("BreakdownPanel — group_by=path", () => {
+  it("shows the hostname-prefixed, shortened path as the label and the raw install_id:path as the tooltip", () => {
+    render(
+      <BreakdownPanel
+        title="By path"
+        groupBy="path"
+        totalsCost={1}
+        breakdown={[
+          row({ key: "thw-home:/home/thw-home/gits/my-task", raw_key: "install-a-uuid:/home/thw-home/gits/my-task", cost: 1, tokens: 100, turns: 1 }),
+        ]}
+      />,
+    );
+
+    const label = screen.getByText("thw-home: my-task");
+    expect(label).toBeInTheDocument();
+    expect(label).toHaveAttribute("title", "install-a-uuid:/home/thw-home/gits/my-task");
+  });
+
+  it("falls back to key itself as the tooltip when raw_key is absent (no machines row)", () => {
+    render(
+      <BreakdownPanel
+        title="By path"
+        groupBy="path"
+        totalsCost={1}
+        breakdown={[row({ key: "install-orphan:/home/thw-home/gits/my-task", cost: 1, tokens: 100, turns: 1 })]}
+      />,
+    );
+
+    const label = screen.getByText("install-orphan: my-task");
+    expect(label).toHaveAttribute("title", "install-orphan:/home/thw-home/gits/my-task");
+  });
+
+  it("retires the machine-as-UI-disambiguator: two machines' identical raw paths render as two distinct rows via their own hostname prefix, not a '(hostname)' suffix", () => {
+    render(
+      <BreakdownPanel
+        title="By path"
+        groupBy="path"
+        totalsCost={4}
+        breakdown={[
+          row({ key: "thw-home:/home/thw-home/gits/my-task", cost: 3, tokens: 100, turns: 1 }),
+          row({ key: "thw-laptop:/home/thw-home/gits/my-task", cost: 1, tokens: 100, turns: 1 }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("thw-home: my-task")).toBeInTheDocument();
+    expect(screen.getByText("thw-laptop: my-task")).toBeInTheDocument();
+    // The old story-1 disambiguator format ("my-task (thw-home)") must
+    // not appear — the compound key already made these two rows distinct
+    // before shortenPaths ever ran, so its own machine-fallback branch is
+    // never reached from this call site anymore.
+    expect(screen.queryByText(/\(thw-home\)/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\(thw-laptop\)/)).not.toBeInTheDocument();
+  });
+
+  it("still applies basename collision walk-up between two different real paths sharing a basename", () => {
+    render(
+      <BreakdownPanel
+        title="By path"
+        groupBy="path"
+        totalsCost={2}
+        breakdown={[
+          row({ key: "thw-home:/home/a/gits/my-template", cost: 1, tokens: 100, turns: 1 }),
+          row({ key: "thw-home:/home/b/other/my-template", cost: 1, tokens: 100, turns: 1 }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("thw-home: gits/my-template")).toBeInTheDocument();
+    expect(screen.getByText("thw-home: other/my-template")).toBeInTheDocument();
+  });
+
+  it("flags the (unknown) sentinel path as an unknown row, not its hostname prefix", () => {
+    render(
+      <BreakdownPanel
+        title="By path"
+        groupBy="path"
+        totalsCost={1}
+        breakdown={[row({ key: "thw-home:(unknown)", cost: 1, tokens: 100, turns: 1 })]}
+      />,
+    );
+
+    const label = screen.getByText("thw-home: (unknown)");
+    expect(label.closest(".rank-row")).toHaveClass("unknown");
+  });
+});
