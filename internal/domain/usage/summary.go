@@ -147,17 +147,58 @@ func ParseGroupBy(s string) (GroupBy, bool) {
 // one place Aggregate touches Event's individual dimension fields, so
 // adding a future group_by option is a one-line change here plus the
 // wire enum, not a change scattered across Aggregate's own logic.
+//
+// GroupByPath's key is machine-prefixed (`<machine>:<path>`, story-2/
+// ticket-7 — supersedes story-1's bare `e.Path`): two machines reporting
+// the exact same literal path string are two distinct breakdown rows,
+// not one silently merged row (story-1's contract deferred this exact
+// bug — "Cross-machine path identity" section, story-2's contract). No
+// schema change; `machine` already exists on every event. Service.Summary
+// substitutes the machine prefix for a display hostname afterward
+// (service.go's substituteMachineHostnamesInPathKeys), the same
+// "aggregate on the raw join key, substitute for display after" pattern
+// GroupByMachine's own hostname substitution already uses.
 func (g GroupBy) keyFor(e Event) string {
 	switch g {
 	case GroupByActor:
 		return e.Actor
 	case GroupByPath:
-		return e.Path
+		return e.Machine + ":" + e.Path
 	case GroupByMachine:
 		return e.Machine
 	default:
 		return ""
 	}
+}
+
+// excludedFromPathBreakdown implements the contract's "Path/actor dedup"
+// rule (story-2/ticket-7, new — no story-1 precedent): a session whose
+// `path` equals that same session's own raw launch cwd never touched
+// anything outside where it started, so `path` and `actor` are the same
+// underlying fact for it — By path must not show it as a second,
+// separate thing (goal.md point 4). Since story-2/ticket-7 also redefines
+// `actor` to be exactly that raw launch cwd (actor.go's ActorFromCwd),
+// the raw-cwd half of the contract's equality test ("path equals cwd, or
+// its git-root") reduces to this direct field comparison — the only half
+// this ticket's own Verifiable section actually names and tests. The
+// git-root half is deliberately NOT independently recomputed here:
+// Aggregate is a pure function with no resolver/database dependency
+// (contract's Testing Decisions), and it runs on the core server against
+// events that may have been reported by a different machine entirely, so
+// live git-root resolution against Actor at aggregation time is not just
+// out of scope but structurally impossible (the path may not even exist
+// on this machine). One accepted residual gap this leaves, relative to
+// goal.md point 4's plain-English intent: a session launched from a
+// subdirectory of a git repo that never touched anything outside that
+// repo has Path (git-rooted, per the collector's own resolution chain)
+// != Actor (the raw, un-rooted launch cwd) — that case is NOT deduped by
+// this check. Fixing it would need a new field/scope the contract doesn't
+// grant here, not a bug in what this ticket actually asked for. Scoped to
+// group_by=path only — this event's contribution to every other group_by
+// dimension,
+// and to Totals/ReportingInstalls, is unaffected.
+func excludedFromPathBreakdown(e Event) bool {
+	return e.Path == e.Actor
 }
 
 // Totals is GET /usage/summary's `totals` object and one fixed window's
@@ -177,13 +218,18 @@ type Totals struct {
 // over this value, never done here.
 //
 // RawKey is empty except when Service.Summary has substituted Key for a
-// friendlier display value (group_by=machine: Key becomes
-// machines.hostname, RawKey carries the install_id Aggregate originally
-// grouped by) — the contract's "machine label" rule requires the raw
-// install_id stay reachable (the console's tooltip), the same
-// "shortened label, full value still reachable" pattern `path` already
-// follows. Aggregate itself never sets this field; it is populated only
-// by Service.Summary's post-aggregation substitution pass.
+// friendlier display value:
+//   - group_by=machine (story-1/ticket-18): Key becomes machines.hostname,
+//     RawKey carries the install_id Aggregate originally grouped by.
+//   - group_by=path (story-2/ticket-7): Key becomes `<hostname>:<path>`,
+//     RawKey carries the ground-truth `<install_id>:<path>` Aggregate's
+//     own keyFor(GroupByPath) originally produced.
+//
+// Both cases exist for the same reason (the contract's "machine label"/
+// "Cross-machine path identity" rules): the raw join key must stay
+// reachable somewhere (the console's tooltip) even once Key itself shows
+// a friendlier value. Aggregate itself never sets this field; it is
+// populated only by Service.Summary's post-aggregation substitution pass.
 type BreakdownRow struct {
 	Key    string
 	RawKey string
@@ -237,6 +283,15 @@ func Aggregate(events []Event, groupBy GroupBy) SummaryResult {
 
 		if e.Machine != "" {
 			machines[e.Machine] = struct{}{}
+		}
+
+		if groupBy == GroupByPath && excludedFromPathBreakdown(e) {
+			// Path/actor dedup (contract's "Path/actor dedup" section):
+			// still counted in Totals/ReportingInstalls above, just left
+			// out of group_by=path's own breakdown — applied here, before
+			// ranking/truncation, so it can never occupy a top-N slot a
+			// real project path should have.
+			continue
 		}
 
 		key := groupBy.keyFor(e)

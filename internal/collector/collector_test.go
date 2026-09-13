@@ -64,7 +64,7 @@ func TestRun_ScansExtractsAttributesAndPosts_ThenTracksSentState(t *testing.T) {
 	}
 	evt1 := byID["msg_1"]
 	assert.Equal(t, "session-1", evt1.SessionID)
-	assert.Equal(t, "freya", evt1.Actor, "cwd matches .typ-crews/freya")
+	assert.Equal(t, "/home/thw-home/.typ-crews/freya", evt1.Actor, "story-2/ticket-7: actor is the raw launch cwd, verbatim")
 	assert.Equal(t, "/home/thw-home/gits/my-token", evt1.Path, "resolved via the injected git-root resolver")
 	assert.Equal(t, "install-abc", evt1.Machine)
 	assert.Equal(t, int64(100), evt1.InputTokens)
@@ -78,17 +78,23 @@ func TestRun_ScansExtractsAttributesAndPosts_ThenTracksSentState(t *testing.T) {
 	assert.Empty(t, poster2.posted)
 }
 
+// TestRun_ActorUnknownFallsBackToUnknownMarker: story-2/ticket-7 removes
+// the only way this used to be reachable (a cwd not matching the
+// `.typ-crews/<name>` pattern — any non-empty cwd is now a valid actor
+// value on its own). The only remaining path to unknownActor is
+// collector.go's own FirstCwdBearingRow-ok=false case: no cwd-bearing row
+// at all for the session (an empty "cwd" field on every line).
 func TestRun_ActorUnknownFallsBackToUnknownMarker(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "session-1.jsonl"),
-		usageLine("r1", "msg_1", "claude-sonnet-4-5", "text", 10, 5, 0, 0, "/home/thw-home/gits/some-repo", "session-1", "2026-09-10T12:00:00Z")+"\n")
+		usageLine("r1", "msg_1", "claude-sonnet-4-5", "text", 10, 5, 0, 0, "", "session-1", "2026-09-10T12:00:00Z")+"\n")
 
 	poster := &fakePoster{}
 	cfg := Config{ScanPaths: []string{root}, InstallID: "install-abc"}
 	_, err := Run(cfg, filepath.Join(t.TempDir(), "state.json"), filepath.Join(t.TempDir(), "pathstore.db"), fakeResolver("/home/thw-home/gits/some-repo"), "test-host", poster)
 	require.NoError(t, err)
 	require.Len(t, poster.posted, 1)
-	assert.Equal(t, "(unknown)", poster.posted[0].Actor)
+	assert.Equal(t, "(unknown)", poster.posted[0].Actor, "no cwd-bearing row at all for this session")
 }
 
 func TestRun_NotAGitRepoFallsBackToRawCwdForPath(t *testing.T) {
@@ -136,7 +142,7 @@ func TestRun_TouchedPathsMajorityVoteBeatsSessionCwd(t *testing.T) {
 	assert.Equal(t, 1, result.NewRowsFound)
 	require.Len(t, poster.posted, 1)
 	assert.Equal(t, "/home/thw-home/gits/my-template", poster.posted[0].Path, "touched-path majority vote must win over the session's own never-drifting cwd")
-	assert.Equal(t, "luna", poster.posted[0].Actor, "actor stays cwd-derived — ticket 13 only changes path")
+	assert.Equal(t, "/home/thw-home/.typ-crews/luna", poster.posted[0].Actor, "actor stays cwd-derived — ticket 13 only changed path; story-2/ticket-7 only changed actor's own format, not this resolution order")
 }
 
 // TestRun_MultipleCrewHomesUnderOneScanRoot_AllFoundAndDistinctlyAttributed
@@ -176,9 +182,9 @@ func TestRun_MultipleCrewHomesUnderOneScanRoot_AllFoundAndDistinctlyAttributed(t
 		actorBySession[e.SessionID] = e.Actor
 	}
 	require.Len(t, actorBySession, 3, "all 3 sessions must be present")
-	assert.Equal(t, "alice", actorBySession["session-alice"])
-	assert.Equal(t, "bob", actorBySession["session-bob"])
-	assert.Equal(t, "carol", actorBySession["session-carol"])
+	assert.Equal(t, "/home/x/.typ-crews/alice", actorBySession["session-alice"], "story-2/ticket-7: actor is the raw launch cwd, verbatim")
+	assert.Equal(t, "/home/x/.typ-crews/bob", actorBySession["session-bob"])
+	assert.Equal(t, "/home/x/.typ-crews/carol", actorBySession["session-carol"])
 
 	// Each actor must be its own distinct value — not collapsed into one
 	// shared actor, and not just the first one repeated for all three.

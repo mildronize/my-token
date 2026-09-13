@@ -1,28 +1,19 @@
 package collector
 
-import "regexp"
-
-// crewHomePattern matches a `.typ-crews/<name>` segment anywhere in a
-// path (contract's Data model: "derived from a `.typ-crews/<name>`-
-// equivalent launch-directory pattern"; ticket 12's own text: a pattern
-// like `/home/*/.typ-crews/<name>`). Deliberately not anchored to
-// `/home/*` specifically — the crew-home convention is what matters, not
-// which filesystem root it sits under on a given host — but is anchored
-// so `<name>` is exactly the path segment immediately following
-// `.typ-crews/`, not some later segment two or three deep.
-var crewHomePattern = regexp.MustCompile(`\.typ-crews/([^/]+)`)
-
-// ActorFromCwd extracts the crew name from a session's cwd (or any other
-// path known to be under a crew home) by matching the first
-// `.typ-crews/<name>` segment. Returns ok=false when cwd doesn't match
-// the pattern at all — callers decide what "unknown actor" means for
-// their own purpose (collector.go falls back to "(unknown)", mirroring
-// the console's own path-label fallback convention — contract's Console
-// display rules).
-func ActorFromCwd(cwd string) (actor string, ok bool) {
-	m := crewHomePattern.FindStringSubmatch(cwd)
-	if m == nil {
-		return "", false
-	}
-	return m[1], true
+// ActorFromCwd derives a session's `actor` from its cwd (or any other
+// path known to be that session's launch directory): the raw cwd value,
+// verbatim, no pattern matching, no crew-home convention baked in
+// anywhere (story-2/ticket-7 — supersedes tickets 7/8/12's original
+// `.typ-crews/<name>` pattern match, a real gap against my-token's own
+// stated design goal of being usable by a non-typ-fleet user too).
+// Matches the reference collector's (`~/tmp/claude-token-tracker`) own
+// `project` derivation method: the session's own launch cwd, unmodified.
+//
+// There is no "unmatched" case anymore — any non-empty cwd is a valid
+// actor value, so this has no ok bool to return. collector.go's own
+// actorForSession keeps its existing unknownActor fallback exactly as it
+// was: that fallback lives at the FirstCwdBearingRow-ok=false level (no
+// cwd-bearing row found at all for a session), not here.
+func ActorFromCwd(cwd string) string {
+	return cwd
 }

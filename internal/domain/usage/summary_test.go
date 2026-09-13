@@ -266,6 +266,10 @@ func TestAggregate_ByActor_SumsTokensCostTurnsPerActor(t *testing.T) {
 	assert.Equal(t, int64(1), got.Breakdown[1].Turns)
 }
 
+// TestAggregate_ByPath_GroupsOnPathNotActor: story-2/ticket-7 makes
+// GroupByPath's key machine-prefixed (`<machine>:<path>`, was bare
+// `path`) — every event here shares the same machine ("m1"), so the
+// prefix doesn't change how many rows result, just their Key shape.
 func TestAggregate_ByPath_GroupsOnPathNotActor(t *testing.T) {
 	events := []Event{
 		ev("freya", "/gits/my-task", "m1", 100, 0, 0, 0, 1.0),
@@ -275,11 +279,83 @@ func TestAggregate_ByPath_GroupsOnPathNotActor(t *testing.T) {
 	got := Aggregate(events, GroupByPath)
 
 	require.Len(t, got.Breakdown, 2)
-	assert.Equal(t, "/gits/my-token", got.Breakdown[0].Key) // higher cost first
+	assert.Equal(t, "m1:/gits/my-token", got.Breakdown[0].Key) // higher cost first
 	assert.InDelta(t, 5.0, got.Breakdown[0].Cost, 1e-9)
-	assert.Equal(t, "/gits/my-task", got.Breakdown[1].Key)
+	assert.Equal(t, "m1:/gits/my-task", got.Breakdown[1].Key)
 	assert.InDelta(t, 2.0, got.Breakdown[1].Cost, 1e-9)
 	assert.Equal(t, int64(2), got.Breakdown[1].Turns)
+}
+
+// TestAggregate_ByPath_CrossMachineIdenticalPath_ProducesDistinctRows is
+// the contract's own direct regression test for the false-merge bug
+// story-1 documented and deferred (goal.md point 1, contract's
+// "Cross-machine path identity" section): two Events with identical Path
+// but different Machine must produce two distinct group_by=path
+// breakdown rows, keyed `machine:path`, never one merged row.
+func TestAggregate_ByPath_CrossMachineIdenticalPath_ProducesDistinctRows(t *testing.T) {
+	events := []Event{
+		ev("freya", "/gits/my-task", "install-a", 100, 0, 0, 0, 1.0),
+		ev("nicole", "/gits/my-task", "install-b", 100, 0, 0, 0, 3.0),
+	}
+	got := Aggregate(events, GroupByPath)
+
+	require.Len(t, got.Breakdown, 2, "the exact same literal path from two machines must not silently merge into one row")
+	assert.Equal(t, "install-b:/gits/my-task", got.Breakdown[0].Key, "higher cost first")
+	assert.InDelta(t, 3.0, got.Breakdown[0].Cost, 1e-9)
+	assert.Equal(t, "install-a:/gits/my-task", got.Breakdown[1].Key)
+	assert.InDelta(t, 1.0, got.Breakdown[1].Cost, 1e-9)
+}
+
+// --- Aggregate: Path/actor dedup (story-2/ticket-7, contract's
+// "Path/actor dedup" section, new — no story-1 precedent) --------------
+
+// TestAggregate_ByPath_ActorPathDedup_ExcludesSessionThatNeverLeftLaunchCwd
+// is the contract's own table-driven acceptance test: an Event whose
+// Path equals its own session's launch cwd (== Actor, per story-2/
+// ticket-7's actor redefinition) is excluded from group_by=path's
+// breakdown entirely; a sibling Event in the same session whose Path
+// differs from that cwd is unaffected. Both events still count toward
+// Totals/ReportingInstalls — the dedup rule only scopes group_by=path's
+// own breakdown.
+func TestAggregate_ByPath_ActorPathDedup_ExcludesSessionThatNeverLeftLaunchCwd(t *testing.T) {
+	events := []Event{
+		// This session's path never left its own launch cwd — path ==
+		// actor is the dedup signal, must be excluded from the breakdown.
+		ev("/home/thw-home/gits/my-token", "/home/thw-home/gits/my-token", "install-a", 100, 0, 0, 0, 1.0),
+		// A sibling event in a DIFFERENT session whose path genuinely
+		// differs from its own actor — unaffected, must still appear.
+		ev("/home/thw-home/.typ-crews/freya", "/home/thw-home/gits/other-project", "install-a", 100, 0, 0, 0, 2.0),
+	}
+	got := Aggregate(events, GroupByPath)
+
+	require.Len(t, got.Breakdown, 1, "the never-left-launch-cwd session must be excluded entirely")
+	assert.Equal(t, "install-a:/home/thw-home/gits/other-project", got.Breakdown[0].Key)
+
+	// Totals/ReportingInstalls are unaffected — the dedup rule only scopes
+	// group_by=path's own breakdown, per the contract's own wording
+	// ("excluded from group_by=path entirely", not from the event set).
+	assert.Equal(t, int64(2), got.Totals.Turns)
+	assert.Equal(t, int64(1), got.ReportingInstalls)
+}
+
+// TestAggregate_ByPath_ActorPathDedup_OnlyAppliesToGroupByPath proves the
+// exclusion is scoped to group_by=path only — the same dedup-eligible
+// event still appears normally under every other group_by dimension.
+func TestAggregate_ByPath_ActorPathDedup_OnlyAppliesToGroupByPath(t *testing.T) {
+	events := []Event{
+		ev("/home/thw-home/gits/my-token", "/home/thw-home/gits/my-token", "install-a", 100, 0, 0, 0, 1.0),
+	}
+
+	byActor := Aggregate(events, GroupByActor)
+	require.Len(t, byActor.Breakdown, 1)
+	assert.Equal(t, "/home/thw-home/gits/my-token", byActor.Breakdown[0].Key)
+
+	byMachine := Aggregate(events, GroupByMachine)
+	require.Len(t, byMachine.Breakdown, 1)
+	assert.Equal(t, "install-a", byMachine.Breakdown[0].Key)
+
+	byPath := Aggregate(events, GroupByPath)
+	assert.Empty(t, byPath.Breakdown, "excluded from group_by=path's breakdown only")
 }
 
 func TestAggregate_ByMachine_GroupsOnMachine(t *testing.T) {

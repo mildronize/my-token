@@ -96,8 +96,11 @@ func Run(cfg Config, statePath string, pathStorePath string, gitRootResolver Git
 		return result, err
 	}
 
-	// `actor` stays session-cwd-based, unchanged from tickets 7/8/12 —
-	// ticket 13 only upgrades `path`.
+	// `actor` stays session-cwd-based, unchanged from tickets 7/8/12 in
+	// shape (still resolved once per session from the session's first
+	// cwd-bearing row) — story-2/ticket-7 changes what ActorFromCwd does
+	// with that cwd (raw, verbatim, no `.typ-crews` pattern match
+	// anymore), not this function's own resolution order.
 	actorBySession := make(map[string]string)
 	actorForSession := func(sessionID string) string {
 		if a, ok := actorBySession[sessionID]; ok {
@@ -105,9 +108,7 @@ func Run(cfg Config, statePath string, pathStorePath string, gitRootResolver Git
 		}
 		a := unknownActor
 		if cwd, ok := FirstCwdBearingRow(allRows, sessionID); ok {
-			if resolved, ok := ActorFromCwd(cwd); ok {
-				a = resolved
-			}
+			a = ActorFromCwd(cwd)
 		}
 		actorBySession[sessionID] = a
 		return a
