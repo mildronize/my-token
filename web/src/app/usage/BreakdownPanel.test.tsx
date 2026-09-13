@@ -49,6 +49,73 @@ describe("BreakdownPanel — group_by=machine", () => {
   });
 });
 
+// story-2/ticket-14: group_by=actor's key is now the session's raw
+// launch cwd (ticket 7 removed the `.typ-crews/<name>` regex), so it
+// gets the same basename+tooltip shortening as `path` — a bare crew
+// name (pre-story-2 data) is already its own basename, so this is a
+// pure additive fix with no visible change for old rows.
+describe("BreakdownPanel — group_by=actor", () => {
+  it("shortens a raw launch cwd to its basename, full value in the tooltip", () => {
+    render(
+      <BreakdownPanel
+        title="By actor"
+        groupBy="actor"
+        totalsCost={1}
+        breakdown={[row({ key: "/home/thw-home/.typ-crews/naomi", cost: 1, tokens: 100, turns: 1 })]}
+      />,
+    );
+
+    const label = screen.getByText("naomi");
+    expect(label).toBeInTheDocument();
+    expect(label).toHaveAttribute("title", "/home/thw-home/.typ-crews/naomi");
+  });
+
+  it("leaves an already-short pre-story-2 actor value (a bare crew name) unchanged", () => {
+    render(
+      <BreakdownPanel
+        title="By actor"
+        groupBy="actor"
+        totalsCost={1}
+        breakdown={[row({ key: "hestia", cost: 1, tokens: 100, turns: 1 })]}
+      />,
+    );
+
+    const label = screen.getByText("hestia");
+    expect(label).toHaveAttribute("title", "hestia");
+  });
+
+  it("applies basename collision walk-up between two different real actor paths sharing a basename", () => {
+    render(
+      <BreakdownPanel
+        title="By actor"
+        groupBy="actor"
+        totalsCost={2}
+        breakdown={[
+          row({ key: "/home/thw-home/.typ-crews/naomi", cost: 1, tokens: 100, turns: 1 }),
+          row({ key: "/home/other-host/.typ-crews/naomi", cost: 1, tokens: 100, turns: 1 }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("thw-home/.typ-crews/naomi")).toBeInTheDocument();
+    expect(screen.getByText("other-host/.typ-crews/naomi")).toBeInTheDocument();
+  });
+
+  it("flags the (unknown) sentinel actor as an unknown row", () => {
+    render(
+      <BreakdownPanel
+        title="By actor"
+        groupBy="actor"
+        totalsCost={1}
+        breakdown={[row({ key: "(unknown)", cost: 1, tokens: 100, turns: 1 })]}
+      />,
+    );
+
+    const label = screen.getByText("(unknown)");
+    expect(label.closest(".rank-row")).toHaveClass("unknown");
+  });
+});
+
 // story-2/ticket-7: group_by=path's key is now machine-prefixed
 // (`<hostname>:<path>` once the BFF substitutes it,
 // `<install_id>:<path>` raw) — internal/domain/usage/summary.go's

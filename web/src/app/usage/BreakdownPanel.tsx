@@ -2,8 +2,10 @@
 // machine), each row showing a proportional cost-share bar. `path`'s own
 // display rule (contract's "Console display rules") is applied here to
 // the path portion of `key` (story-2/ticket-7: `key` is machine-prefixed
-// for group_by=path) — display shortening beyond the BFF's own hostname
-// substitution is entirely this component's own job.
+// for group_by=path), and (story-2/ticket-14) to `actor` directly, since
+// `actor` is now also a directory-shaped value — display shortening
+// beyond the BFF's own hostname substitution is entirely this
+// component's own job.
 import { formatCost, formatTokensCompact } from "~/lib/format";
 import { shortenPaths } from "~/lib/pathDisplay";
 import type { UsageBreakdownRow, UsageGroupBy } from "~/lib/usage";
@@ -56,7 +58,10 @@ function splitMachinePrefix(key: string): { machine: string | null; path: string
  * BFF never substituted anything (the contract's own no-machines-row
  * fallback case: `key` is already the raw install_id there), so the
  * tooltip falls back to `key` itself rather than showing nothing.
- * `actor` keys are rendered as their raw value, same as the mockup shows.
+ * `actor` (story-2/ticket-14): since ticket 7 made `actor` the session's
+ * raw launch cwd rather than a short bare name, it now gets the same
+ * basename+tooltip shortening as `path` (no machine-prefix to split off
+ * first, unlike `path` — `actor` is never machine-prefixed).
  *
  * `path` (story-2/ticket-7): `key` is now machine-prefixed
  * (`<hostname-or-install_id>:<path>`, summary.go's keyFor(GroupByPath) +
@@ -84,11 +89,18 @@ function toDisplayRows(groupBy: UsageGroupBy, rows: UsageBreakdownRow[]): Displa
       isUnknown: r.key === UNKNOWN_SENTINEL,
     }));
   }
-  if (groupBy !== "path") {
-    return rows.map((r) => ({
+  if (groupBy === "actor") {
+    // story-2/ticket-14: `actor` is now the session's raw launch cwd
+    // (ticket 7 — no more `.typ-crews/<name>` regex extracting a short
+    // bare name), so it needs the exact same basename+tooltip treatment
+    // `path` already gets, or every new row renders as an unreadable
+    // full absolute path while pre-story-2 rows (still short bare names
+    // on disk) look fine — the inconsistency that surfaced this ticket.
+    const shortened = shortenPaths(rows.map((r) => ({ path: r.key })));
+    return rows.map((r, i) => ({
       key: r.key,
-      label: r.key,
-      title: r.key,
+      label: shortened[i].label,
+      title: shortened[i].title,
       tokens: r.tokens,
       cost: r.cost,
       isUnknown: r.key === UNKNOWN_SENTINEL,
