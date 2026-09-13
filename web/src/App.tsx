@@ -18,6 +18,7 @@ import { Toaster } from "~/components/ui/sonner";
 import AppLayout from "~/app/AppLayout";
 import SettingsPage from "~/app/settings/page";
 import UsagePage from "~/app/usage/UsagePage";
+import MachinesPage from "~/app/machines/MachinesPage";
 
 export default function App() {
   return (
@@ -30,6 +31,10 @@ export default function App() {
               <Routes>
                 <Route path="/" element={<UsagePage />} />
                 <Route path="/usage" element={<UsagePage />} />
+                {/* story-3/ticket-3: the Machines overview page. Ticket-4
+                    adds the "/machines/:installId" detail route this
+                    page's own row click navigates to. */}
+                <Route path="/machines" element={<MachinesPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
               </Routes>
             </AppLayout>

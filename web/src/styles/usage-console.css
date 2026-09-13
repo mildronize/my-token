@@ -338,6 +338,13 @@
   background: var(--uc-surface-raised);
 }
 
+/* story-3/ticket-3: MachinesPage's own row-click-to-detail rows — styled
+   here (rather than an inline style) so cursor affordance lives with the
+   rest of this stylesheet's table styling. */
+.usage-console tbody tr.clickable-row {
+  cursor: pointer;
+}
+
 .usage-console td.num,
 .usage-console th.num {
   font-family: var(--uc-mono);

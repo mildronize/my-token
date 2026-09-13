@@ -27,7 +27,7 @@ describe("machineOptionsFromBreakdown", () => {
 describe("scanRootOptionsFromList", () => {
   it("builds the composite install_id:scan_root_path value per the contract's machine-prefix convention", () => {
     const rows: UsageScanRoot[] = [
-      { install_id: "install-a", hostname: "thw-home", scan_root_path: "~/.claude", name: "main" },
+      { install_id: "install-a", hostname: "thw-home", scan_root_path: "~/.claude", name: "main", source_type: "claude_code" },
     ];
     const options = scanRootOptionsFromList(rows);
     expect(options).toHaveLength(1);
