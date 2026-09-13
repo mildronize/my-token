@@ -58,6 +58,16 @@ type fakeRepo struct {
 	// going through UpsertScanRoot first.
 	listScanRootsResult []ScanRootRecord
 	listScanRootsErr    error
+
+	// machineSummariesResult/machineSummariesErr back ListMachineSummaries
+	// directly (story-3/ticket-1) — a plain stand-in for the real SQL
+	// aggregation (repo_test.go proves that against a real database),
+	// mirroring listScanRootsResult above. Service.MachineSummaries is a
+	// thin pass-through (service.go's own doc comment), so these tests
+	// only need to prove that pass-through, not re-prove the aggregation
+	// itself.
+	machineSummariesResult []MachineSummary
+	machineSummariesErr    error
 }
 
 type upsertMachineCall struct {
@@ -178,6 +188,13 @@ func (f *fakeRepo) UpsertScanRoot(ctx context.Context, installID, scanRootPath, 
 	}
 	f.scanRoots[installID+"|"+scanRootPath] = scanRootRecord{name: name, sourceType: sourceType, lastSeenAt: lastSeenAt}
 	return nil
+}
+
+func (f *fakeRepo) ListMachineSummaries(ctx context.Context) ([]MachineSummary, error) {
+	if f.machineSummariesErr != nil {
+		return nil, f.machineSummariesErr
+	}
+	return f.machineSummariesResult, nil
 }
 
 func TestService_IngestBatch_ComputesCostAndSetsSource_NeverFromCaller(t *testing.T) {
@@ -799,4 +816,54 @@ func TestService_ScanRoots_MachineHostnamesRepoError_Propagates(t *testing.T) {
 	svc := NewService(repo)
 	_, err := svc.ScanRoots(context.Background())
 	assert.ErrorIs(t, err, repo.hostnamesErr)
+}
+
+// --- MachineSummaries: GET /api/bff/machines (story-3/ticket-1) --------
+// Service.MachineSummaries is a thin pass-through over Repo.
+// ListMachineSummaries (service.go's own doc comment) — these tests only
+// prove that pass-through (result and error both flow through unchanged);
+// the real aggregation/ordering SQL is proven against a real database in
+// repo_test.go, and the HTTP wire shape end to end in bff/usage_handler_
+// test.go.
+
+// TestService_MachineSummaries_ReturnsRepoResultUnchanged is this
+// method's own core acceptance test: whatever Repo.ListMachineSummaries
+// returns comes back from Service.MachineSummaries exactly as given, no
+// re-sort, no field transform.
+func TestService_MachineSummaries_ReturnsRepoResultUnchanged(t *testing.T) {
+	repo := newFakeRepo()
+	want := []MachineSummary{
+		{InstallID: "install-1", Hostname: "thw-home", LastSeenAt: time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC), LifetimeCost: 4.5, LifetimeTokens: 1000, CollectedPaths: 3, CollectedActors: 2},
+		{InstallID: "install-2", Hostname: "thw-laptop", LastSeenAt: time.Date(2026, 9, 12, 8, 0, 0, 0, time.UTC), LifetimeCost: 0, LifetimeTokens: 0, CollectedPaths: 0, CollectedActors: 0},
+	}
+	repo.machineSummariesResult = want
+
+	svc := NewService(repo)
+	got, err := svc.MachineSummaries(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+}
+
+// TestService_MachineSummaries_NoMachines_EmptySlice proves the
+// zero-machines case returns whatever Repo itself returns for "nothing
+// registered" (an empty/nil slice), not an error.
+func TestService_MachineSummaries_NoMachines_EmptySlice(t *testing.T) {
+	repo := newFakeRepo()
+
+	svc := NewService(repo)
+	got, err := svc.MachineSummaries(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+// TestService_MachineSummaries_RepoError_Propagates proves a real repo
+// failure surfaces to the caller unchanged, mirroring every other
+// Service method's own error-propagation test on this surface.
+func TestService_MachineSummaries_RepoError_Propagates(t *testing.T) {
+	repo := newFakeRepo()
+	repo.machineSummariesErr = errors.New("db down")
+
+	svc := NewService(repo)
+	_, err := svc.MachineSummaries(context.Background())
+	assert.ErrorIs(t, err, repo.machineSummariesErr)
 }

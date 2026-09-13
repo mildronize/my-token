@@ -56,6 +56,24 @@ type ScanRootRecord struct {
 	Name         string
 }
 
+// MachineSummary is one row of ListMachineSummaries (db/queries/
+// machines.sql) — story-3/ticket-1: a machine's lifetime summary, already
+// fully aggregated and hostname-paired in SQL. Unlike ScanRootRecord/
+// ScanRootWithHostname's split (service.go), this query needs no further
+// Go-side join or transform, so one type carries it through both Repo and
+// Service — Service.MachineSummaries (service.go) is a thin pass-through
+// over this exact shape, not a second, identically-shaped type, since
+// there is nothing for that layer to add.
+type MachineSummary struct {
+	InstallID       string
+	Hostname        string
+	LastSeenAt      time.Time
+	LifetimeCost    float64
+	LifetimeTokens  int64
+	CollectedPaths  int64
+	CollectedActors int64
+}
+
 // Repository is the subset of Repo's methods Service depends on —
 // declared here, not in repo.go's own type, so tests can supply a fake
 // without a real database.
@@ -130,6 +148,18 @@ type Repository interface {
 	// substitution pattern above). A no-rows result is an empty slice,
 	// not an error — mirrors MachineHostnames' own "no known rows" case.
 	ListScanRoots(ctx context.Context) ([]ScanRootRecord, error)
+
+	// ListMachineSummaries returns every machines row's lifetime summary,
+	// sorted last_seen_at descending — story-3/ticket-1: Service.
+	// MachineSummaries' own read path backing GET /api/bff/machines
+	// (contract's API surface). Aggregation (SUM/COUNT DISTINCT) and the
+	// last_seen_at DESC ordering both happen in SQL (db/queries/
+	// machines.sql's own doc comment explains why, unlike MachineHostnames/
+	// ListScanRoots above), so this method needs no Go-side join or sort —
+	// a machines row with no matching usage_events rows still comes back
+	// as one row with every numeric field zeroed, never omitted or errored
+	// (the query's own LEFT JOIN/COALESCE).
+	ListMachineSummaries(ctx context.Context) ([]MachineSummary, error)
 }
 
 // Repo is the only type in this package that imports the sqlc-generated
@@ -382,6 +412,77 @@ func (r *Repo) ListScanRoots(ctx context.Context) ([]ScanRootRecord, error) {
 			InstallID:    row.InstallID,
 			ScanRootPath: row.ScanRootPath,
 			Name:         row.Name,
+		})
+	}
+	return out, nil
+}
+
+// ListMachineSummariesRow's two COALESCE(SUM(...), 0) columns
+// (LifetimeCost, LifetimeTokens) come back from sqlc typed as
+// `interface{}` (internal/db/machines.sql.go), not a fixed numeric type —
+// SQLite is dynamically typed and this expression's runtime value
+// genuinely varies: a machine with matching usage_events rows gets back
+// whatever numeric type the driver chose for the real SUM (float64 for
+// lifetime_cost's REAL column, int64 for lifetime_tokens' INTEGER-typed
+// sum), while a machine with none gets back the query's own literal `0`
+// (int64). float64/int64 are the only two shapes SQLite's own type
+// affinity rules can ever produce here; a driver-level nil (no COALESCE
+// fallback at all) can never happen given the query always coalesces.
+//
+// numericToFloat64/numericToInt64 are two separate, explicitly-named
+// conversions rather than one shared helper — lifetime_cost (a monetary
+// amount) and lifetime_tokens (a count) are different units, and keeping
+// them textually distinct at each call site says so; it also means
+// LifetimeTokens converts straight to int64 without a float64 round trip
+// (a real int64 SUM staying a real int64, not passing through a type
+// that only exactly represents integers up to 2^53). Both fall back to
+// the zero value on an unexpected shape rather than panicking, matching
+// every other defensive fallback in this package.
+func numericToFloat64(v interface{}) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case int64:
+		return float64(n)
+	default:
+		return 0
+	}
+}
+
+func numericToInt64(v interface{}) int64 {
+	switch n := v.(type) {
+	case int64:
+		return n
+	case float64:
+		return int64(n)
+	default:
+		return 0
+	}
+}
+
+// ListMachineSummaries implements Repository.ListMachineSummaries over the
+// sqlc-generated ListMachineSummaries query (db/queries/machines.sql) —
+// story-3/ticket-1. No further aggregation, join, or re-sort here: the
+// query itself already does all of it (that file's own doc comment
+// explains why), so this method's only job is converting the
+// sqlc-generated row's two dynamically-typed numeric columns
+// (numericToFloat64/numericToInt64, above) into MachineSummary's own
+// fixed-type fields.
+func (r *Repo) ListMachineSummaries(ctx context.Context) ([]MachineSummary, error) {
+	rows, err := r.q.ListMachineSummaries(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]MachineSummary, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, MachineSummary{
+			InstallID:       row.InstallID,
+			Hostname:        row.Hostname,
+			LastSeenAt:      row.LastSeenAt,
+			LifetimeCost:    numericToFloat64(row.LifetimeCost),
+			LifetimeTokens:  numericToInt64(row.LifetimeTokens),
+			CollectedPaths:  row.CollectedPaths,
+			CollectedActors: row.CollectedActors,
 		})
 	}
 	return out, nil

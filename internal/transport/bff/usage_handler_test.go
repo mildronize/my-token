@@ -746,6 +746,105 @@ func TestGetUsageScanRoots_MissingSession_Unauthorized(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 }
 
+func decodeMachineList(t *testing.T, rec *httptest.ResponseRecorder) bffapi.MachineList {
+	t.Helper()
+	var got bffapi.MachineList
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	return got
+}
+
+// --- GET /api/bff/machines (story-3/ticket-1) ---------------------------
+
+// TestGetMachines_ReturnsLifetimeSummaryAcrossMachines_SortedByLastReportedDesc
+// is this ticket's own core acceptance test (contract's Verifiable
+// section): two machines, seeded usage_events across distinct
+// paths/actors/costs, come back with the correct wire shape -- per-machine
+// lifetime_cost/lifetime_tokens/collected_paths/collected_actors -- sorted
+// last_seen_at descending, matching last_seen_at's own "Last reported"
+// semantics (not usage_events' own created_at).
+func TestGetMachines_ReturnsLifetimeSummaryAcrossMachines_SortedByLastReportedDesc(t *testing.T) {
+	router, session, conn := newBFFRouterForUsage(t)
+
+	earlierSeen := time.Date(2026, 9, 12, 8, 0, 0, 0, time.UTC)
+	laterSeen := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+
+	// install-a last reported most recently but is seeded first --
+	// proves ordering comes from last_seen_at, not seed/table order.
+	seedMachine(t, conn, "install-a", "thw-home", laterSeen)
+	seedMachine(t, conn, "install-b", "thw-laptop", earlierSeen)
+
+	// install-a: two events, two distinct paths, two distinct actors.
+	seedUsageEvent(t, conn, "event-a1", "freya", "repo-a", "install-a", 100, 1.0, laterSeen.Add(-time.Hour))
+	seedUsageEvent(t, conn, "event-a2", "nicole", "repo-b", "install-a", 200, 2.5, laterSeen.Add(-30*time.Minute))
+	// install-b: one event, one path, one actor.
+	seedUsageEvent(t, conn, "event-b1", "freya", "repo-c", "install-b", 50, 0.5, earlierSeen.Add(-time.Hour))
+
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/machines", session, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	got := decodeMachineList(t, rec)
+	require.Len(t, got.Machines, 2)
+
+	// last_seen_at DESC: install-a (later) must come first.
+	first := got.Machines[0]
+	assert.Equal(t, "install-a", first.InstallId)
+	assert.Equal(t, "thw-home", first.Hostname)
+	assert.True(t, first.LastSeenAt.Equal(laterSeen))
+	assert.InDelta(t, 3.5, first.LifetimeCost, 0.0001)
+	assert.Equal(t, int64(300), first.LifetimeTokens, "100+200 input tokens, no other token columns seeded")
+	assert.Equal(t, int64(2), first.CollectedPaths)
+	assert.Equal(t, int64(2), first.CollectedActors)
+
+	second := got.Machines[1]
+	assert.Equal(t, "install-b", second.InstallId)
+	assert.Equal(t, "thw-laptop", second.Hostname)
+	assert.True(t, second.LastSeenAt.Equal(earlierSeen))
+	assert.InDelta(t, 0.5, second.LifetimeCost, 0.0001)
+	assert.Equal(t, int64(50), second.LifetimeTokens)
+	assert.Equal(t, int64(1), second.CollectedPaths)
+	assert.Equal(t, int64(1), second.CollectedActors)
+}
+
+// TestGetMachines_MachineWithNoUsageEvents_ZeroedFieldsNotOmitted covers
+// the contract's own explicitly-named defensive edge case end to end
+// through the real HTTP route: a machines row with no matching
+// usage_events rows still comes back as one row with every numeric field
+// zeroed, not omitted from the array or erroring.
+func TestGetMachines_MachineWithNoUsageEvents_ZeroedFieldsNotOmitted(t *testing.T) {
+	router, session, conn := newBFFRouterForUsage(t)
+	seenAt := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+	seedMachine(t, conn, "install-orphan", "thw-orphan", seenAt)
+
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/machines", session, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	got := decodeMachineList(t, rec)
+	require.Len(t, got.Machines, 1)
+	assert.Equal(t, "install-orphan", got.Machines[0].InstallId)
+	assert.Equal(t, float64(0), got.Machines[0].LifetimeCost)
+	assert.Equal(t, int64(0), got.Machines[0].LifetimeTokens)
+	assert.Equal(t, int64(0), got.Machines[0].CollectedPaths)
+	assert.Equal(t, int64(0), got.Machines[0].CollectedActors)
+}
+
+// TestGetMachines_NoMachines_EmptyArray proves the zero-machines case
+// returns an empty array on the wire, not null or an error.
+func TestGetMachines_NoMachines_EmptyArray(t *testing.T) {
+	router, session, _ := newBFFRouterForUsage(t)
+
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/machines", session, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	got := decodeMachineList(t, rec)
+	assert.Empty(t, got.Machines)
+}
+
+func TestGetMachines_MissingSession_Unauthorized(t *testing.T) {
+	router, _, _ := newBFFRouterForUsage(t)
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/machines", "", nil)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
 func TestGetUsageWindows_NoEvents_AllZero(t *testing.T) {
 	router, session, _ := newBFFRouterForUsage(t)
 	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/usage/windows", session, nil)

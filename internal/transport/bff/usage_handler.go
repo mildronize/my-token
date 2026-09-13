@@ -195,3 +195,36 @@ func (s *UsageServer) GetUsageScanRoots(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, bffapi.UsageScanRootList{ScanRoots: wire})
 }
+
+// GetMachines implements bffapi.ServerInterface — GET /api/bff/machines
+// (story-3/ticket-1): every machine's lifetime summary, pre-sorted
+// last_seen_at descending by usage.Service.MachineSummaries' own query
+// (db/queries/machines.sql), no re-sort needed here. No parameters, no
+// window/group_by — deliberately lifetime-scoped, unlike GetUsageSummary
+// above (goal's point 3: this page is a fleet inventory, not a trend
+// view).
+func (s *UsageServer) GetMachines(c *gin.Context) {
+	if _, ok := bffOwnerID(c); !ok {
+		return
+	}
+
+	rows, err := s.Service.MachineSummaries(c.Request.Context())
+	if err != nil {
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
+
+	wire := make([]bffapi.Machine, 0, len(rows))
+	for _, r := range rows {
+		wire = append(wire, bffapi.Machine{
+			InstallId:       r.InstallID,
+			Hostname:        r.Hostname,
+			LastSeenAt:      r.LastSeenAt,
+			LifetimeCost:    r.LifetimeCost,
+			LifetimeTokens:  r.LifetimeTokens,
+			CollectedPaths:  r.CollectedPaths,
+			CollectedActors: r.CollectedActors,
+		})
+	}
+	c.JSON(http.StatusOK, bffapi.MachineList{Machines: wire})
+}

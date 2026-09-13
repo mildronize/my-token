@@ -369,6 +369,20 @@ func (s *Service) ScanRoots(ctx context.Context) ([]ScanRootWithHostname, error)
 	return out, nil
 }
 
+// MachineSummaries backs GET /api/bff/machines (story-3/ticket-1,
+// contract's API surface): every machines row's lifetime summary, sorted
+// last_seen_at descending. A thin pass-through over Repo.
+// ListMachineSummaries — unlike Service.ScanRoots' own hostname-joining
+// pass above, there is no Go-side work left for this layer to do: the
+// query already aggregates and orders everything the response needs
+// (db/queries/machines.sql's own doc comment), so this method exists
+// mainly to keep the transport handler (internal/transport/bff/
+// usage_handler.go) talking to Service, never Repo, directly — the same
+// seam every other read path on this surface goes through.
+func (s *Service) MachineSummaries(ctx context.Context) ([]MachineSummary, error) {
+	return s.Repo.ListMachineSummaries(ctx)
+}
+
 // WindowTotals is one row of GET /api/bff/usage/windows' fixed table —
 // Window names which of the fixed ranges this row covers, Totals is
 // that range's turns/tokens/cost (no group_by on this endpoint at all,

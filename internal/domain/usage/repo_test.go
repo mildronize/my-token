@@ -681,3 +681,123 @@ func TestRepo_ListScanRoots_ReflectsRenames(t *testing.T) {
 	require.Len(t, got, 1)
 	assert.Equal(t, "new-name", got[0].Name)
 }
+
+// --- ListMachineSummaries: GET /api/bff/machines (story-3/ticket-1)
+// -------------------------------------------------------------------
+// Contract's Verifiable section: seed usage_events across >=2 machines
+// with distinct paths/actors/costs, assert correct per-machine
+// SUM/COUNT(DISTINCT ...) values and last_seen_at DESC ordering, plus the
+// zero-events edge case (a machines row with no matching usage_events
+// rows returns zeroed numeric fields, not a null/error).
+
+// machineSummaryEvent builds one usage_events row with every field this
+// query's own SUM/COUNT(DISTINCT ...) columns read, Cost set directly
+// (not via CostForUsage/sampleEvent) so each test's expected totals are
+// exact, arbitrary numbers rather than tied to the pricing table.
+func machineSummaryEvent(id, machine, path, actor string, cost float64, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens int64, createdAt time.Time) Event {
+	return Event{
+		ID:                       id,
+		SessionID:                "session-" + id,
+		Actor:                    actor,
+		Path:                     path,
+		Machine:                  machine,
+		Model:                    "claude-sonnet-4-5-20250929",
+		ScanRoot:                 "/home/thw-home/.claude",
+		InputTokens:              inputTokens,
+		OutputTokens:             outputTokens,
+		CacheReadInputTokens:     cacheReadTokens,
+		CacheCreationInputTokens: cacheCreationTokens,
+		Cost:                     cost,
+		Source:                   Source,
+		CreatedAt:                createdAt,
+	}
+}
+
+// TestRepo_ListMachineSummaries_AggregatesPerMachine_SortedByLastSeenDesc
+// is this ticket's own core acceptance test: two machines, each with
+// events across distinct paths/actors/costs, come back with correct
+// per-machine SUM(cost)/SUM(tokens)/COUNT(DISTINCT path)/COUNT(DISTINCT
+// actor), sorted last_seen_at descending (the more recently reported
+// machine first, regardless of insertion order).
+func TestRepo_ListMachineSummaries_AggregatesPerMachine_SortedByLastSeenDesc(t *testing.T) {
+	ctx := context.Background()
+	conn := newTestDB(t)
+	repo := NewRepo(conn)
+
+	earlierSeen := time.Date(2026, 9, 12, 8, 0, 0, 0, time.UTC)
+	laterSeen := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+
+	// install-1 last reported most recently but is upserted first here --
+	// proves ordering comes from last_seen_at, not insertion/table order.
+	require.NoError(t, repo.UpsertMachine(ctx, "install-1", "thw-home", laterSeen))
+	require.NoError(t, repo.UpsertMachine(ctx, "install-2", "thw-laptop", earlierSeen))
+
+	_, err := repo.InsertBatch(ctx, []Event{
+		// install-1: two events, two distinct paths, two distinct actors.
+		machineSummaryEvent("install-1-a", "install-1", "repo-a", "freya", 1.0, 100, 50, 10, 5, laterSeen.Add(-time.Hour)),
+		machineSummaryEvent("install-1-b", "install-1", "repo-b", "nicole", 2.5, 200, 100, 20, 10, laterSeen.Add(-30*time.Minute)),
+		// install-2: one event, one path, one actor.
+		machineSummaryEvent("install-2-a", "install-2", "repo-c", "freya", 0.5, 50, 25, 5, 0, earlierSeen.Add(-time.Hour)),
+	})
+	require.NoError(t, err)
+
+	got, err := repo.ListMachineSummaries(ctx)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+
+	// last_seen_at DESC: install-1 (later) must come first.
+	assert.Equal(t, "install-1", got[0].InstallID)
+	assert.Equal(t, "thw-home", got[0].Hostname)
+	assert.True(t, got[0].LastSeenAt.Equal(laterSeen))
+	assert.InDelta(t, 3.5, got[0].LifetimeCost, 0.0001, "SUM(cost) across both install-1 events")
+	assert.Equal(t, int64(495), got[0].LifetimeTokens, "SUM of all four token columns across both events: (100+50+10+5)+(200+100+20+10)")
+	assert.Equal(t, int64(2), got[0].CollectedPaths, "repo-a and repo-b are distinct")
+	assert.Equal(t, int64(2), got[0].CollectedActors, "freya and nicole are distinct")
+
+	assert.Equal(t, "install-2", got[1].InstallID)
+	assert.Equal(t, "thw-laptop", got[1].Hostname)
+	assert.True(t, got[1].LastSeenAt.Equal(earlierSeen))
+	assert.InDelta(t, 0.5, got[1].LifetimeCost, 0.0001)
+	assert.Equal(t, int64(80), got[1].LifetimeTokens, "50+25+5+0")
+	assert.Equal(t, int64(1), got[1].CollectedPaths)
+	assert.Equal(t, int64(1), got[1].CollectedActors)
+}
+
+// TestRepo_ListMachineSummaries_NoMatchingUsageEvents_ZeroedNotNull covers
+// the contract's own explicitly-named defensive edge case: a machines row
+// with no matching usage_events rows (not currently reachable via the
+// collector, per that file's own doc comment) still comes back as one
+// row with every numeric field zeroed -- the LEFT JOIN/COALESCE must
+// hold, not silently omit the machine or error.
+func TestRepo_ListMachineSummaries_NoMatchingUsageEvents_ZeroedNotNull(t *testing.T) {
+	ctx := context.Background()
+	conn := newTestDB(t)
+	repo := NewRepo(conn)
+
+	seenAt := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+	require.NoError(t, repo.UpsertMachine(ctx, "install-orphan", "thw-orphan", seenAt))
+	// Deliberately no usage_events rows for install-orphan at all.
+
+	got, err := repo.ListMachineSummaries(ctx)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "install-orphan", got[0].InstallID)
+	assert.Equal(t, "thw-orphan", got[0].Hostname)
+	assert.Equal(t, float64(0), got[0].LifetimeCost)
+	assert.Equal(t, int64(0), got[0].LifetimeTokens)
+	assert.Equal(t, int64(0), got[0].CollectedPaths)
+	assert.Equal(t, int64(0), got[0].CollectedActors)
+}
+
+// TestRepo_ListMachineSummaries_NoMachines_EmptySlice mirrors
+// TestRepo_ListScanRoots_NoRows_EmptySlice: the zero-machines case
+// returns an empty slice, not an error.
+func TestRepo_ListMachineSummaries_NoMachines_EmptySlice(t *testing.T) {
+	ctx := context.Background()
+	conn := newTestDB(t)
+	repo := NewRepo(conn)
+
+	got, err := repo.ListMachineSummaries(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
