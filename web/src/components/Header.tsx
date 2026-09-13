@@ -49,8 +49,17 @@ export default function Header() {
   }
 
   return (
-    <header className="sticky top-0 z-50 border-b border-[var(--line)] bg-[var(--header-bg)] px-4">
-      <nav className="mx-auto flex max-w-7xl items-center gap-3 py-3 sm:py-4">
+    <header className="sticky top-0 z-50 border-b border-[var(--line)] bg-[var(--header-bg)] px-[clamp(16px,4vw,48px)]">
+      {/* story-2/ticket-17: มายด์'s own report — the navbar's content used
+          to sit inside a centered max-w-7xl container while the usage
+          console body below it (usage-console.css's .usage-console) has
+          no max-width at all, stretching edge to edge. On a wide screen
+          that put the nav's logo/links visibly narrower than the body
+          underneath it. Dropped the cap entirely and matched the header's
+          own horizontal padding to the exact clamp() the console body
+          already uses, so both line up at any viewport width instead of
+          just both being "full width" independently. */}
+      <nav className="flex items-center gap-3 py-3 sm:py-4">
         {/* Logo pill */}
         <Link
           to="/"
