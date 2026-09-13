@@ -75,6 +75,11 @@ describe("UsagePage — window tabs re-scope the breakdown panels' query", () =>
     cleanup();
     global.fetch = originalFetch;
     vi.restoreAllMocks();
+    // story-2/ticket-15: the window tab now persists to localStorage
+    // (useUsageFilters) — each test here assumes it starts from the
+    // default "today" window, which only holds if the previous test's
+    // tab click didn't leak into this one via real jsdom localStorage.
+    window.localStorage.clear();
   });
 
   it("clicking the Year tab is possible and re-fetches every breakdown panel with window=year", async () => {
@@ -126,6 +131,49 @@ describe("UsagePage — window tabs re-scope the breakdown panels' query", () =>
 
     await waitFor(() => {
       expect(screen.getByRole("tab", { name: "Lifetime" })).toHaveAttribute("aria-selected", "true");
+    });
+  });
+
+  // story-2/ticket-15: มายด์'s own report — "when i mean filter, it also
+  // mean 5h/24h/Today/Week/Month/Year/Lifetime too." The window tab is
+  // now persisted the same way machine/scan-root already are.
+  it("a selected window tab survives a remount — restored from localStorage, applied to the very first fetch", async () => {
+    mockUsageFetch();
+    const { unmount } = renderWithClient(<UsagePage />);
+
+    const yearTab = await screen.findByRole("tab", { name: "Year" });
+    await userEvent.click(yearTab);
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Year" })).toHaveAttribute("aria-selected", "true");
+    });
+
+    unmount();
+    cleanup();
+
+    const { calledUrls } = mockUsageFetch();
+    renderWithClient(<UsagePage />);
+
+    // The remounted page's very first request already carries the
+    // persisted window — proving it came from localStorage, not the
+    // "today" default, and not a user re-clicking the tab.
+    await waitFor(() => {
+      expect(calledUrls).toContain("/api/bff/usage/summary?window=year&group_by=actor");
+    });
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Year" })).toHaveAttribute("aria-selected", "true");
+    });
+  });
+
+  it("a stored window value that isn't a real fixed window falls back to the default 'today'", async () => {
+    window.localStorage.setItem("my-token.usage-console.filter.window", "not-a-real-window");
+    const { calledUrls } = mockUsageFetch();
+    renderWithClient(<UsagePage />);
+
+    await waitFor(() => {
+      expect(calledUrls).toContain("/api/bff/usage/summary?window=today&group_by=actor");
+    });
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Today" })).toHaveAttribute("aria-selected", "true");
     });
   });
 });

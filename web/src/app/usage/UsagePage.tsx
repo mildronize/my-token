@@ -42,17 +42,12 @@
 // 14's) — the host pill is omitted here rather than fabricating a value
 // or silently repurposing `machine` (the install_id) as a stand-in for
 // a hostname, which it isn't. See ticket-14-report.md's Decision section.
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 
 import "~/styles/usage-console.css";
 import { ErrorState } from "~/components/ErrorState";
 import { Spinner } from "~/components/ui/spinner";
-import {
-  useUsageSummaryQuery,
-  useUsageWindowsQuery,
-  useUsageScanRootsQuery,
-  type UsageWindow,
-} from "~/lib/usage";
+import { useUsageSummaryQuery, useUsageWindowsQuery, useUsageScanRootsQuery } from "~/lib/usage";
 import { useUsageFilters } from "./useUsageFilters";
 import { UsageFilters, machineOptionsFromBreakdown, scanRootOptionsFromList } from "./UsageFilters";
 import { WindowTabs } from "./WindowTabs";
@@ -60,17 +55,17 @@ import { SummaryTiles } from "./SummaryTiles";
 import { WindowsTable } from "./WindowsTable";
 import { BreakdownPanel } from "./BreakdownPanel";
 
-const DEFAULT_WINDOW: UsageWindow = "today";
-
 export default function UsagePage() {
-  const [selectedWindow, setSelectedWindow] = useState<UsageWindow>(DEFAULT_WINDOW);
-
   // story-2/ticket-11: the console's two new filters (contract's "Console
   // filters" section) — persisted to localStorage (useUsageFilters), AND
   // composed with each other and with `window`, applied globally below
   // (every panel's own query grows the same two optional params, not just
   // one panel's).
-  const { machine, scanRoot, setMachine, setScanRoot } = useUsageFilters();
+  //
+  // story-2/ticket-15: the window tab now persists too (useUsageFilters
+  // owns all three — machine/scanRoot/window are the same kind of state,
+  // same get/set/persist shape).
+  const { machine, scanRoot, window: selectedWindow, setMachine, setScanRoot, setWindow: setSelectedWindow } = useUsageFilters();
   const filters = { machine, scanRoot };
 
   const lifetimeByActor = useUsageSummaryQuery("lifetime", "actor", filters);
