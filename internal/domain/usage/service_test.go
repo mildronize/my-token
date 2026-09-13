@@ -704,10 +704,12 @@ func TestService_UpsertScanRoots_RepoError_Propagates(t *testing.T) {
 // TestService_ScanRoots_JoinsHostnameFromMachines is this ticket's own
 // core acceptance test: a scan_roots row whose install_id has a
 // corresponding machines row comes back with that row's hostname.
+//
+// story-3/ticket-2: also asserts SourceType passes through unchanged.
 func TestService_ScanRoots_JoinsHostnameFromMachines(t *testing.T) {
 	repo := newFakeRepo()
 	repo.listScanRootsResult = []ScanRootRecord{
-		{InstallID: "install-1", ScanRootPath: "/home/thw-home/.claude", Name: "main"},
+		{InstallID: "install-1", ScanRootPath: "/home/thw-home/.claude", Name: "main", SourceType: "claude_code"},
 	}
 	repo.machines["install-1"] = "thw-home"
 
@@ -721,6 +723,7 @@ func TestService_ScanRoots_JoinsHostnameFromMachines(t *testing.T) {
 		Hostname:     "thw-home",
 		ScanRootPath: "/home/thw-home/.claude",
 		Name:         "main",
+		SourceType:   "claude_code",
 	}, got[0])
 }
 
@@ -751,8 +754,8 @@ func TestService_ScanRoots_NoMachinesRow_FallsBackToInstallID(t *testing.T) {
 func TestService_ScanRoots_ReturnsEveryRowAcrossInstalls(t *testing.T) {
 	repo := newFakeRepo()
 	repo.listScanRootsResult = []ScanRootRecord{
-		{InstallID: "install-1", ScanRootPath: "/home/thw-home/.claude", Name: "main"},
-		{InstallID: "install-2", ScanRootPath: "/home/thw-home/.claude", Name: "main"},
+		{InstallID: "install-1", ScanRootPath: "/home/thw-home/.claude", Name: "main", SourceType: "claude_code"},
+		{InstallID: "install-2", ScanRootPath: "/home/thw-home/.claude", Name: "main", SourceType: "codex"},
 	}
 	repo.machines["install-1"] = "thw-home"
 	repo.machines["install-2"] = "thw-laptop"
@@ -762,8 +765,8 @@ func TestService_ScanRoots_ReturnsEveryRowAcrossInstalls(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.ElementsMatch(t, []ScanRootWithHostname{
-		{InstallID: "install-1", Hostname: "thw-home", ScanRootPath: "/home/thw-home/.claude", Name: "main"},
-		{InstallID: "install-2", Hostname: "thw-laptop", ScanRootPath: "/home/thw-home/.claude", Name: "main"},
+		{InstallID: "install-1", Hostname: "thw-home", ScanRootPath: "/home/thw-home/.claude", Name: "main", SourceType: "claude_code"},
+		{InstallID: "install-2", Hostname: "thw-laptop", ScanRootPath: "/home/thw-home/.claude", Name: "main", SourceType: "codex"},
 	}, got)
 }
 

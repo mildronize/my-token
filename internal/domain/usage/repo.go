@@ -50,10 +50,15 @@ type Event struct {
 // no hostname of its own — Service.ScanRoots joins that in from
 // MachineHostnames (below), same as the existing group_by=machine/
 // group_by=path substitution pattern.
+//
+// SourceType (story-3/ticket-2) is a plain pass-through of the
+// scan_roots.source_type column — already written by UpsertScanRoot
+// since story-2/ticket-8, just never read back by this record until now.
 type ScanRootRecord struct {
 	InstallID    string
 	ScanRootPath string
 	Name         string
+	SourceType   string
 }
 
 // Repository is the subset of Repo's methods Service depends on —
@@ -382,6 +387,7 @@ func (r *Repo) ListScanRoots(ctx context.Context) ([]ScanRootRecord, error) {
 			InstallID:    row.InstallID,
 			ScanRootPath: row.ScanRootPath,
 			Name:         row.Name,
+			SourceType:   row.SourceType,
 		})
 	}
 	return out, nil

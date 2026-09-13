@@ -172,7 +172,9 @@ func (s *UsageServer) GetUsageWindows(c *gin.Context, params bffapi.GetUsageWind
 // machine's hostname (usage.Service.ScanRoots does the join, in Go, over
 // two separate repo reads — no params, no window/group_by, this endpoint
 // exists purely to populate the console's future scan-root filter
-// dropdown, ticket 11).
+// dropdown, ticket 11). story-3/ticket-2 adds source_type to the wire
+// mapping below — additive, the filter dropdown (its only consumer
+// before this ticket) doesn't display it and needs no change.
 func (s *UsageServer) GetUsageScanRoots(c *gin.Context) {
 	if _, ok := bffOwnerID(c); !ok {
 		return
@@ -191,6 +193,7 @@ func (s *UsageServer) GetUsageScanRoots(c *gin.Context) {
 			Hostname:     r.Hostname,
 			ScanRootPath: r.ScanRootPath,
 			Name:         r.Name,
+			SourceType:   r.SourceType,
 		})
 	}
 	c.JSON(http.StatusOK, bffapi.UsageScanRootList{ScanRoots: wire})

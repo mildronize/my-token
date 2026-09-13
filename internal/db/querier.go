@@ -71,6 +71,10 @@ type Querier interface {
 	// as a SQL JOIN here -- same reasoning ListMachines' own doc comment
 	// gives: reuse the pure aggregation/substitution logic that already
 	// exists rather than re-deriving a join in SQL.
+	//
+	// story-3/ticket-2: also selects source_type -- already a real column
+	// (story-2/ticket-8), just never selected here since ticket-9 only
+	// needed this query for the filter dropdown, which doesn't display it.
 	ListScanRoots(ctx context.Context) ([]ListScanRootsRow, error)
 	// story-1/ticket-14: every event whose created_at falls between the two
 	// bound parameters below, range_start inclusive, range_end exclusive.

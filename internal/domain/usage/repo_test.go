@@ -641,6 +641,10 @@ func TestRepo_ListScanRoots_NoRows_EmptySlice(t *testing.T) {
 // TestRepo_ListScanRoots_ReturnsEveryRegisteredRoot is this ticket's own
 // core acceptance test at the repo layer: every scan_roots row upserted so
 // far comes back, across more than one install_id.
+//
+// story-3/ticket-2: also asserts SourceType comes back verbatim — two
+// distinct source_type values here (not both "claude_code") so the
+// assertion can't pass by coincidence if SourceType were left zeroed.
 func TestRepo_ListScanRoots_ReturnsEveryRegisteredRoot(t *testing.T) {
 	ctx := context.Background()
 	conn := newTestDB(t)
@@ -648,15 +652,15 @@ func TestRepo_ListScanRoots_ReturnsEveryRegisteredRoot(t *testing.T) {
 
 	now := time.Date(2026, 9, 10, 8, 0, 0, 0, time.UTC)
 	require.NoError(t, repo.UpsertScanRoot(ctx, "install-1", "/home/thw-home/.claude", "main", "claude_code", now))
-	require.NoError(t, repo.UpsertScanRoot(ctx, "install-1", "/home/thw-home/.claude-local", "backup-install", "claude_code", now))
+	require.NoError(t, repo.UpsertScanRoot(ctx, "install-1", "/home/thw-home/.claude-local", "backup-install", "codex", now))
 	require.NoError(t, repo.UpsertScanRoot(ctx, "install-2", "/home/thw-home/.claude", "main", "claude_code", now))
 
 	got, err := repo.ListScanRoots(ctx)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []ScanRootRecord{
-		{InstallID: "install-1", ScanRootPath: "/home/thw-home/.claude", Name: "main"},
-		{InstallID: "install-1", ScanRootPath: "/home/thw-home/.claude-local", Name: "backup-install"},
-		{InstallID: "install-2", ScanRootPath: "/home/thw-home/.claude", Name: "main"},
+		{InstallID: "install-1", ScanRootPath: "/home/thw-home/.claude", Name: "main", SourceType: "claude_code"},
+		{InstallID: "install-1", ScanRootPath: "/home/thw-home/.claude-local", Name: "backup-install", SourceType: "codex"},
+		{InstallID: "install-2", ScanRootPath: "/home/thw-home/.claude", Name: "main", SourceType: "claude_code"},
 	}, got)
 }
 
