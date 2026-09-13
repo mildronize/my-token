@@ -2,9 +2,9 @@
 // machine), each row showing a proportional cost-share bar. `path`'s own
 // display rule (contract's "Console display rules") is applied here to
 // the path portion of `key` (story-2/ticket-7: `key` is machine-prefixed
-// for group_by=path), and (story-2/ticket-14) to `actor` directly, since
-// `actor` is now also a directory-shaped value — display shortening
-// beyond the BFF's own hostname substitution is entirely this
+// for group_by=path), and (story-2/ticket-16) identically to `actor`,
+// since `actor`'s key is machine-prefixed the same way now — display
+// shortening beyond the BFF's own hostname substitution is entirely this
 // component's own job.
 import { formatCost, formatTokensCompact } from "~/lib/format";
 import { shortenPaths } from "~/lib/pathDisplay";
@@ -20,6 +20,16 @@ interface BreakdownPanelProps {
   groupBy: UsageGroupBy;
   breakdown: UsageBreakdownRow[];
   totalsCost: number;
+  /**
+   * story-2/ticket-16: the console's own active `machine` filter value
+   * (raw install_id), if one is selected — mayd's own observation: once
+   * every row on screen is already scoped to one machine, repeating that
+   * machine's name as a prefix on every single row is pure noise, not
+   * disambiguation. `undefined` (no filter active) keeps the prefix,
+   * since it's doing real work there (telling apart rows from different
+   * machines in the same unfiltered list).
+   */
+  activeMachine?: string;
 }
 
 interface DisplayRow {
@@ -36,12 +46,13 @@ interface DisplayRow {
 // path, flagged with its own "unknown" row styling below.
 const UNKNOWN_SENTINEL = "(unknown)";
 
-// splitMachinePrefix splits group_by=path's own machine-prefixed key
-// (`<machine>:<path>`, story-2/ticket-7 — either `<hostname>:<path>` once
-// Service.Summary has substituted it, or the raw `<install_id>:<path>`
-// fallback) into its two parts. Defensive fallback to "no prefix found"
-// for anything that doesn't contain a colon — shouldn't happen given
-// Aggregate's own keyFor(GroupByPath), which always produces exactly one.
+// splitMachinePrefix splits group_by=path/actor's own machine-prefixed key
+// (`<machine>:<value>`, story-2/ticket-7 for path, ticket-16 for actor —
+// either `<hostname>:<value>` once Service.Summary has substituted it, or
+// the raw `<install_id>:<value>` fallback) into its two parts. Defensive
+// fallback to "no prefix found" for anything that doesn't contain a colon
+// — shouldn't happen given Aggregate's own keyFor, which always produces
+// exactly one for these two dimensions.
 function splitMachinePrefix(key: string): { machine: string | null; path: string } {
   const i = key.indexOf(":");
   if (i < 0) return { machine: null, path: key };
@@ -54,31 +65,34 @@ function splitMachinePrefix(key: string): { machine: string | null; path: string
  * BFF's own substitution, not this component's job) as the label, with
  * `raw_key` (the install_id) as the tooltip when present — same
  * "shortened label, full value still reachable via tooltip" pattern as
- * `path` (contract's "machine label" rule). `raw_key` is absent when the
- * BFF never substituted anything (the contract's own no-machines-row
- * fallback case: `key` is already the raw install_id there), so the
- * tooltip falls back to `key` itself rather than showing nothing.
- * `actor` (story-2/ticket-14): since ticket 7 made `actor` the session's
- * raw launch cwd rather than a short bare name, it now gets the same
- * basename+tooltip shortening as `path` (no machine-prefix to split off
- * first, unlike `path` — `actor` is never machine-prefixed).
+ * `path`/`actor` (contract's "machine label" rule). `raw_key` is absent
+ * when the BFF never substituted anything (the contract's own
+ * no-machines-row fallback case: `key` is already the raw install_id
+ * there), so the tooltip falls back to `key` itself rather than showing
+ * nothing.
  *
- * `path` (story-2/ticket-7): `key` is now machine-prefixed
- * (`<hostname-or-install_id>:<path>`, summary.go's keyFor(GroupByPath) +
- * Service.Summary's substitution pass) — two machines' identical raw
- * paths are already two distinct rows by the time they reach this
- * component, so the machine-as-UI-disambiguator behavior story-1's
- * contract described (shortenPaths' own `machine` fallback, appended in
- * parens only on a literal-path collision) is retired here: it's no
- * longer reachable, since the compound key already guarantees
- * uniqueness before shortenPaths ever runs. Only the path portion is
- * passed through shortenPaths (collision-scope basename/walk-up still
- * matters between two *different* real project paths); the machine
- * portion is prepended to the shortened label as-is. The tooltip shows
- * `raw_key ?? key` — the ground-truth `<install_id>:<path>` — same
- * fallback pattern as `machine`.
+ * `path` (story-2/ticket-7) and `actor` (story-2/ticket-16, same fix for
+ * the same reason once ticket 7 made `actor` a raw directory path too):
+ * both keys are now machine-prefixed (`<hostname-or-install_id>:<value>`,
+ * summary.go's keyFor + Service.Summary's substitution pass) — two
+ * machines' identical raw values are already two distinct rows by the
+ * time they reach this component, so the machine-as-UI-disambiguator
+ * behavior story-1's contract described for `path` (shortenPaths' own
+ * `machine` fallback, appended in parens only on a literal-path
+ * collision) is retired here: it's no longer reachable, since the
+ * compound key already guarantees uniqueness before shortenPaths ever
+ * runs. Only the value portion is passed through shortenPaths
+ * (collision-scope basename/walk-up still matters between two
+ * *different* real values); the machine portion is prepended to the
+ * shortened label as-is — UNLESS `activeMachine` is set (a machine
+ * filter is selected), in which case every row is already scoped to that
+ * one machine and repeating its name on every row is pure noise, so the
+ * prefix is dropped from the label entirely (มายด์'s own observation).
+ * The tooltip always shows `raw_key ?? key` — the ground-truth
+ * `<install_id>:<value>` — regardless of whether the label shows the
+ * prefix, same fallback pattern as `machine`.
  */
-function toDisplayRows(groupBy: UsageGroupBy, rows: UsageBreakdownRow[]): DisplayRow[] {
+function toDisplayRows(groupBy: UsageGroupBy, rows: UsageBreakdownRow[], activeMachine: string | undefined): DisplayRow[] {
   if (groupBy === "machine") {
     return rows.map((r) => ({
       key: r.key,
@@ -89,29 +103,14 @@ function toDisplayRows(groupBy: UsageGroupBy, rows: UsageBreakdownRow[]): Displa
       isUnknown: r.key === UNKNOWN_SENTINEL,
     }));
   }
-  if (groupBy === "actor") {
-    // story-2/ticket-14: `actor` is now the session's raw launch cwd
-    // (ticket 7 — no more `.typ-crews/<name>` regex extracting a short
-    // bare name), so it needs the exact same basename+tooltip treatment
-    // `path` already gets, or every new row renders as an unreadable
-    // full absolute path while pre-story-2 rows (still short bare names
-    // on disk) look fine — the inconsistency that surfaced this ticket.
-    const shortened = shortenPaths(rows.map((r) => ({ path: r.key })));
-    return rows.map((r, i) => ({
-      key: r.key,
-      label: shortened[i].label,
-      title: shortened[i].title,
-      tokens: r.tokens,
-      cost: r.cost,
-      isUnknown: r.key === UNKNOWN_SENTINEL,
-    }));
-  }
 
+  // groupBy is "actor" or "path" — both machine-prefixed keys, identical
+  // shape, identical treatment.
   const parsed = rows.map((r) => splitMachinePrefix(r.key));
   const shortened = shortenPaths(parsed.map((p) => ({ path: p.path })));
   return rows.map((r, i) => ({
     key: r.key,
-    label: parsed[i].machine !== null ? `${parsed[i].machine}: ${shortened[i].label}` : shortened[i].label,
+    label: parsed[i].machine !== null && !activeMachine ? `${parsed[i].machine}: ${shortened[i].label}` : shortened[i].label,
     title: r.raw_key ?? r.key,
     tokens: r.tokens,
     cost: r.cost,
@@ -119,9 +118,9 @@ function toDisplayRows(groupBy: UsageGroupBy, rows: UsageBreakdownRow[]): Displa
   }));
 }
 
-export function BreakdownPanel({ title, groupBy, breakdown, totalsCost }: BreakdownPanelProps) {
+export function BreakdownPanel({ title, groupBy, breakdown, totalsCost, activeMachine }: BreakdownPanelProps) {
   const top = breakdown.slice(0, BREAKDOWN_TOP_N);
-  const displayRows = toDisplayRows(groupBy, top);
+  const displayRows = toDisplayRows(groupBy, top, activeMachine);
 
   return (
     <div className="panel">

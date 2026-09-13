@@ -345,7 +345,7 @@ func TestService_Summary_MachineFilter_NarrowsBreakdownAndTotals(t *testing.T) {
 	assert.Equal(t, int64(1), got.Totals.Turns, "totals must be scoped to the filtered machine, not every event")
 	assert.Equal(t, int64(100), got.Totals.Tokens)
 	require.Len(t, got.Breakdown, 1)
-	assert.Equal(t, "freya", got.Breakdown[0].Key)
+	assert.Equal(t, "install-a:freya", got.Breakdown[0].Key, "story-2/ticket-16: group_by=actor's key is machine-prefixed too, no machines row seeded here")
 	assert.Equal(t, int64(1), got.ReportingInstalls, "reporting_installs must also be scoped, not lifetime/unfiltered")
 }
 
@@ -510,23 +510,6 @@ func TestService_Summary_GroupByMachine_NoMachinesRow_FallsBackToInstallID(t *te
 	assert.Empty(t, got.Breakdown[0].RawKey, "no substitution happened, so there is no separate raw value")
 }
 
-// TestService_Summary_GroupByActor_NeverConsultsMachineHostnames proves
-// the substitution pass is scoped to group_by=machine only — a
-// group_by=actor request must not even call MachineHostnames, let alone
-// let it affect the breakdown keys.
-func TestService_Summary_GroupByActor_NeverConsultsMachineHostnames(t *testing.T) {
-	repo := newFakeRepo()
-	repo.hostnamesErr = errors.New("must not be called")
-	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
-	repo.events = []Event{ev("freya", "p1", "install-1", 100, 0, 0, 0, 1.0)}
-	repo.events[0].CreatedAt = now.Add(-1 * time.Hour)
-
-	svc := NewService(repo)
-	got, err := svc.Summary(context.Background(), Window24h, GroupByActor, Filter{}, now)
-	require.NoError(t, err)
-	assert.Equal(t, "freya", got.Breakdown[0].Key)
-}
-
 func TestService_Summary_GroupByMachine_HostnamesRepoError_Propagates(t *testing.T) {
 	repo := newFakeRepo()
 	repo.hostnamesErr = errors.New("db down")
@@ -588,10 +571,10 @@ func TestService_Summary_GroupByPath_NoMachinesRow_LeavesRawInstallIDPrefix(t *t
 	assert.Empty(t, got.Breakdown[0].RawKey, "no substitution happened, so there is no separate raw value")
 }
 
-// TestService_Summary_GroupByActor_NeverConsultsMachineHostnames (above)
-// already proves the substitution pass doesn't run for group_by=actor;
-// this proves group_by=path's own MachineHostnames call errors propagate,
-// the same as group_by=machine's own equivalent test does.
+// TestService_Summary_GroupByActor_SubstitutesHostnameInKeyPrefix (below)
+// proves group_by=actor's own equivalent substitution; this proves
+// group_by=path's own MachineHostnames call errors propagate, the same
+// as group_by=machine's own equivalent test does.
 func TestService_Summary_GroupByPath_HostnamesRepoError_Propagates(t *testing.T) {
 	repo := newFakeRepo()
 	repo.hostnamesErr = errors.New("db down")
@@ -601,6 +584,66 @@ func TestService_Summary_GroupByPath_HostnamesRepoError_Propagates(t *testing.T)
 
 	svc := NewService(repo)
 	_, err := svc.Summary(context.Background(), Window24h, GroupByPath, Filter{}, now)
+	assert.ErrorIs(t, err, repo.hostnamesErr)
+}
+
+// --- Service.Summary group_by=actor: hostname substitution in the
+// machine-prefixed key (story-2/ticket-16) -------------------------------
+// Mirrors group_by=path's own substitution tests above exactly — actor's
+// key shape and substitution logic are identical, just over the actor
+// field instead of path.
+
+// TestService_Summary_GroupByActor_SubstitutesHostnameInKeyPrefix is this
+// ticket's own core acceptance criterion for the read side: group_by=actor's
+// breakdown key comes back as `<hostname>:<actor>`, not the raw
+// `<install_id>:<actor>` Aggregate originally grouped by — and RawKey
+// carries that raw key so the console can still show it via tooltip.
+func TestService_Summary_GroupByActor_SubstitutesHostnameInKeyPrefix(t *testing.T) {
+	repo := newFakeRepo()
+	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	repo.events = []Event{ev("freya", "/gits/my-token", "install-1", 100, 0, 0, 0, 1.0)}
+	repo.events[0].CreatedAt = now.Add(-1 * time.Hour)
+	repo.machines["install-1"] = "thw-home"
+
+	svc := NewService(repo)
+	got, err := svc.Summary(context.Background(), Window24h, GroupByActor, Filter{}, now)
+	require.NoError(t, err)
+
+	require.Len(t, got.Breakdown, 1)
+	assert.Equal(t, "thw-home:freya", got.Breakdown[0].Key, "key's install_id prefix must be substituted for the hostname, actor suffix untouched")
+	assert.Equal(t, "install-1:freya", got.Breakdown[0].RawKey, "the raw install_id:actor must still be reachable")
+}
+
+// TestService_Summary_GroupByActor_NoMachinesRow_LeavesRawInstallIDPrefix
+// mirrors the group_by=path no-machines-row fallback: a machine with
+// usage_events rows but no corresponding machines row must never produce
+// a blank/null key — the raw `install_id:actor` key stays exactly as
+// Aggregate produced it.
+func TestService_Summary_GroupByActor_NoMachinesRow_LeavesRawInstallIDPrefix(t *testing.T) {
+	repo := newFakeRepo()
+	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	repo.events = []Event{ev("freya", "/gits/my-token", "install-orphan", 100, 0, 0, 0, 1.0)}
+	repo.events[0].CreatedAt = now.Add(-1 * time.Hour)
+	// Deliberately no repo.machines["install-orphan"] entry.
+
+	svc := NewService(repo)
+	got, err := svc.Summary(context.Background(), Window24h, GroupByActor, Filter{}, now)
+	require.NoError(t, err)
+
+	require.Len(t, got.Breakdown, 1)
+	assert.Equal(t, "install-orphan:freya", got.Breakdown[0].Key, "must fall back to the raw install_id:actor, never a blank key")
+	assert.Empty(t, got.Breakdown[0].RawKey, "no substitution happened, so there is no separate raw value")
+}
+
+func TestService_Summary_GroupByActor_HostnamesRepoError_Propagates(t *testing.T) {
+	repo := newFakeRepo()
+	repo.hostnamesErr = errors.New("db down")
+	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	repo.events = []Event{ev("freya", "/gits/my-token", "install-1", 100, 0, 0, 0, 1.0)}
+	repo.events[0].CreatedAt = now.Add(-1 * time.Hour)
+
+	svc := NewService(repo)
+	_, err := svc.Summary(context.Background(), Window24h, GroupByActor, Filter{}, now)
 	assert.ErrorIs(t, err, repo.hostnamesErr)
 }
 

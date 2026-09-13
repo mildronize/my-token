@@ -165,6 +165,12 @@ func (s *Service) Summary(ctx context.Context, window Window, groupBy GroupBy, f
 		if err := s.substituteMachineHostnamesInPathKeys(ctx, result.Breakdown); err != nil {
 			return SummaryResult{}, err
 		}
+	case GroupByActor:
+		// story-2/ticket-16: same fix, same reason, applied to actor now
+		// that keyFor(GroupByActor) is machine-prefixed too.
+		if err := s.substituteMachineHostnamesInActorKeys(ctx, result.Breakdown); err != nil {
+			return SummaryResult{}, err
+		}
 	}
 
 	return result, nil
@@ -228,6 +234,35 @@ func (s *Service) substituteMachineHostnamesInPathKeys(ctx context.Context, brea
 		}
 		if hostname, ok := hostnames[installID]; ok && hostname != "" {
 			breakdown[i].Key = hostname + ":" + path
+			breakdown[i].RawKey = rawKey
+		}
+	}
+	return nil
+}
+
+// substituteMachineHostnamesInActorKeys is
+// substituteMachineHostnamesInPathKeys' group_by=actor counterpart
+// (story-2/ticket-16): Aggregate's own GroupByActor key is
+// `<install_id>:<actor>` (summary.go's keyFor), identical shape to
+// GroupByPath's own compound key — same substitution, same "never show a
+// blank label" fallback, just over the actor half instead of the path
+// half.
+func (s *Service) substituteMachineHostnamesInActorKeys(ctx context.Context, breakdown []BreakdownRow) error {
+	if len(breakdown) == 0 {
+		return nil
+	}
+	hostnames, err := s.Repo.MachineHostnames(ctx)
+	if err != nil {
+		return err
+	}
+	for i := range breakdown {
+		rawKey := breakdown[i].Key // "<install_id>:<actor>", per keyFor(GroupByActor)
+		installID, actor, found := strings.Cut(rawKey, ":")
+		if !found {
+			continue // defensive: keyFor always produces machine+":"+actor
+		}
+		if hostname, ok := hostnames[installID]; ok && hostname != "" {
+			breakdown[i].Key = hostname + ":" + actor
 			breakdown[i].RawKey = rawKey
 		}
 	}

@@ -148,20 +148,27 @@ func ParseGroupBy(s string) (GroupBy, bool) {
 // adding a future group_by option is a one-line change here plus the
 // wire enum, not a change scattered across Aggregate's own logic.
 //
-// GroupByPath's key is machine-prefixed (`<machine>:<path>`, story-2/
-// ticket-7 — supersedes story-1's bare `e.Path`): two machines reporting
-// the exact same literal path string are two distinct breakdown rows,
-// not one silently merged row (story-1's contract deferred this exact
-// bug — "Cross-machine path identity" section, story-2's contract). No
-// schema change; `machine` already exists on every event. Service.Summary
-// substitutes the machine prefix for a display hostname afterward
-// (service.go's substituteMachineHostnamesInPathKeys), the same
-// "aggregate on the raw join key, substitute for display after" pattern
-// GroupByMachine's own hostname substitution already uses.
+// GroupByPath and GroupByActor's keys are both machine-prefixed
+// (`<machine>:<path>`/`<machine>:<actor>`, story-2/ticket-7 for path,
+// ticket-16 for actor — supersedes each one's own former bare field):
+// two machines reporting the exact same literal path *or* actor string
+// are two distinct breakdown rows, not one silently merged row. Actor
+// needed the identical fix path already had once ticket-7 redefined
+// `actor` to be a raw directory path too (the session's launch cwd) —
+// the exact same identical-string collision risk `path` was fixed
+// against now applies equally to `actor` (มายด์ caught this by testing
+// two collector installs sharing one filesystem, where an identical
+// raw actor path from both is a real, not hypothetical, case). No schema
+// change either time; `machine` already exists on every event.
+// Service.Summary substitutes each prefix for a display hostname
+// afterward (service.go's substituteMachineHostnamesInPathKeys/
+// InActorKeys), the same "aggregate on the raw join key, substitute for
+// display after" pattern GroupByMachine's own hostname substitution
+// already uses.
 func (g GroupBy) keyFor(e Event) string {
 	switch g {
 	case GroupByActor:
-		return e.Actor
+		return e.Machine + ":" + e.Actor
 	case GroupByPath:
 		return e.Machine + ":" + e.Path
 	case GroupByMachine:
@@ -224,9 +231,12 @@ type Totals struct {
 //   - group_by=path (story-2/ticket-7): Key becomes `<hostname>:<path>`,
 //     RawKey carries the ground-truth `<install_id>:<path>` Aggregate's
 //     own keyFor(GroupByPath) originally produced.
+//   - group_by=actor (story-2/ticket-16): same shape, Key becomes
+//     `<hostname>:<actor>`, RawKey carries `<install_id>:<actor>`.
 //
-// Both cases exist for the same reason (the contract's "machine label"/
-// "Cross-machine path identity" rules): the raw join key must stay
+// All three cases exist for the same reason (the contract's "machine
+// label"/"Cross-machine path identity" rules, and ticket-16's identical
+// extension of the latter to actor): the raw join key must stay
 // reachable somewhere (the console's tooltip) even once Key itself shows
 // a friendlier value. Aggregate itself never sets this field; it is
 // populated only by Service.Summary's post-aggregation substitution pass.

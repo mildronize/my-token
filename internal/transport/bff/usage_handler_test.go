@@ -137,7 +137,10 @@ func seedScanRoot(t *testing.T, conn *sql.DB, installID, scanRootPath, name stri
 
 // TestGetUsageSummary_GroupsAndTotalsMatchSeededRows is this endpoint's
 // own core acceptance test: three events across two actors, all inside
-// the requested window, group_by=actor.
+// the requested window, group_by=actor. story-2/ticket-16 makes
+// group_by=actor's key machine-prefixed too (`<hostname>:<actor>` once
+// substituted, `<install_id>:<actor>` raw) — no `machines` row is seeded
+// here, so both rows keep their raw install_id prefix.
 func TestGetUsageSummary_GroupsAndTotalsMatchSeededRows(t *testing.T) {
 	router, session, conn := newBFFRouterForUsage(t)
 	now := time.Now().UTC()
@@ -156,11 +159,11 @@ func TestGetUsageSummary_GroupsAndTotalsMatchSeededRows(t *testing.T) {
 	assert.Equal(t, int64(2), got.ReportingInstalls, "two distinct machines reported in this window")
 
 	require.Len(t, got.Breakdown, 2)
-	assert.Equal(t, "freya", got.Breakdown[0].Key, "freya has the higher cost (3.0), sorted first")
+	assert.Equal(t, "install-a:freya", got.Breakdown[0].Key, "freya has the higher cost (3.0), sorted first")
 	assert.InDelta(t, 3.0, got.Breakdown[0].Cost, 1e-9)
 	assert.Equal(t, int64(300), got.Breakdown[0].Tokens)
 	assert.Equal(t, int64(2), got.Breakdown[0].Turns)
-	assert.Equal(t, "nicole", got.Breakdown[1].Key)
+	assert.Equal(t, "install-b:nicole", got.Breakdown[1].Key)
 	assert.InDelta(t, 0.5, got.Breakdown[1].Cost, 1e-9)
 }
 
@@ -211,6 +214,32 @@ func TestGetUsageSummary_GroupByPath_CrossMachineIdenticalPath_DoesNotMerge(t *t
 	require.Len(t, got.Breakdown, 2, "the same literal path from two different machines must not merge into one row")
 	assert.Equal(t, "thw-laptop:/gits/my-task", got.Breakdown[0].Key, "higher cost first")
 	assert.Equal(t, "thw-home:/gits/my-task", got.Breakdown[1].Key)
+}
+
+// TestGetUsageSummary_GroupByActor_CrossMachineIdenticalActor_DoesNotMerge
+// is story-2/ticket-16's own HTTP-level regression test, mirroring
+// TestGetUsageSummary_GroupByPath_CrossMachineIdenticalPath_DoesNotMerge
+// exactly: the exact same literal actor path reported by two different
+// machines must produce two distinct group_by=actor rows, not one
+// silently merged row (มายด์'s own real-world finding: two collector
+// installs sharing one filesystem can genuinely report an identical raw
+// actor string).
+func TestGetUsageSummary_GroupByActor_CrossMachineIdenticalActor_DoesNotMerge(t *testing.T) {
+	router, session, conn := newBFFRouterForUsage(t)
+	now := time.Now().UTC()
+
+	seedMachine(t, conn, "install-a", "thw-home", now)
+	seedMachine(t, conn, "install-b", "thw-home-openrouter", now)
+	seedUsageEvent(t, conn, "e1", "/home/thw-home/.typ-crews/naomi", "/gits/p1", "install-a", 100, 1.0, now.Add(-1*time.Hour))
+	seedUsageEvent(t, conn, "e2", "/home/thw-home/.typ-crews/naomi", "/gits/p2", "install-b", 100, 3.0, now.Add(-1*time.Hour))
+
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/usage/summary?window=24h&group_by=actor", session, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	got := decodeUsageSummary(t, rec)
+	require.Len(t, got.Breakdown, 2, "the same literal actor path from two different machines must not merge into one row")
+	assert.Equal(t, "thw-home-openrouter:/home/thw-home/.typ-crews/naomi", got.Breakdown[0].Key, "higher cost first")
+	assert.Equal(t, "thw-home:/home/thw-home/.typ-crews/naomi", got.Breakdown[1].Key)
 }
 
 // TestGetUsageSummary_GroupByMachine_ReturnsHostnamesNotUUIDs is this
@@ -387,7 +416,7 @@ func TestGetUsageSummary_MachineFilter_NarrowsWholeResult(t *testing.T) {
 	assert.Equal(t, int64(1), got.Totals.Turns, "totals must be scoped to the filtered machine")
 	assert.Equal(t, int64(100), got.Totals.Tokens)
 	require.Len(t, got.Breakdown, 1)
-	assert.Equal(t, "freya", got.Breakdown[0].Key)
+	assert.Equal(t, "install-a:freya", got.Breakdown[0].Key)
 	assert.Equal(t, int64(1), got.ReportingInstalls, "reporting_installs must also be scoped, not lifetime/unfiltered")
 }
 
@@ -411,7 +440,7 @@ func TestGetUsageSummary_ScanRootFilter_NarrowsWholeResult(t *testing.T) {
 	assert.Equal(t, int64(1), got.Totals.Turns)
 	assert.Equal(t, int64(100), got.Totals.Tokens)
 	require.Len(t, got.Breakdown, 1)
-	assert.Equal(t, "freya", got.Breakdown[0].Key)
+	assert.Equal(t, "install-a:freya", got.Breakdown[0].Key)
 }
 
 // TestGetUsageSummary_BothFiltersSet_ANDComposeToIntersection is the
@@ -437,7 +466,7 @@ func TestGetUsageSummary_BothFiltersSet_ANDComposeToIntersection(t *testing.T) {
 	assert.Equal(t, int64(1), got.Totals.Turns, "only the row matching BOTH filters should count")
 	assert.Equal(t, int64(100), got.Totals.Tokens)
 	require.Len(t, got.Breakdown, 1)
-	assert.Equal(t, "freya", got.Breakdown[0].Key)
+	assert.Equal(t, "install-a:freya", got.Breakdown[0].Key)
 }
 
 // TestGetUsageSummary_InvalidScanRoot_MalformedShape_EmptyResultNotError

@@ -204,12 +204,14 @@ export default function UsagePage() {
             groupBy="actor"
             breakdown={windowByActor.data.breakdown}
             totalsCost={windowByActor.data.totals.cost}
+            activeMachine={machine}
           />
           <BreakdownPanel
             title="By path"
             groupBy="path"
             breakdown={windowByPath.data.breakdown}
             totalsCost={windowByPath.data.totals.cost}
+            activeMachine={machine}
           />
           <BreakdownPanel
             title="By machine"
