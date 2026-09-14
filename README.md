@@ -1,52 +1,69 @@
-# my-template
+# My Token
 
-A reusable Go microservice + web app fork template with owner/agent auth, an OpenAPI-first API, and a worked example domain.
+Track Claude Code token usage and cost across every machine you run it on.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-> [WARNING ⚠️]
-> This repo is written AI-agent-first: the fork checklist, the code comments,
-> and the `.chief/` planning docs are dense with cross-references and
-> reasoning meant for an AI coding agent to read and act on directly, not for
-> a human to skim. Some of it (`docs/GETTING-STARTED.md` especially) is long
-> and interleaves "why this changed" history with the actual instructions
-> rather than separating them. If you're forking this by hand, read slowly —
-> or better, point an AI coding assistant at the repo and have it walk you
-> through the fork checklist instead of reading it cold yourself.
-
 ## About
 
-A starting point for a new Go microservice + web app, so you fork something
-that already runs instead of building from a blank repo. It gives you:
+Most token-usage tools assume one machine and one project. My Token
+doesn't: a lightweight collector runs on each machine, reads Claude Code's
+own session transcripts, and reports usage to a shared core service — so
+usage and cost roll up across every machine you've installed it on, not
+just the one you're looking at.
 
-- A login flow (SSO, for a human owner)
-- API-key auth (for agents, scripts, other services — no browser session needed)
-- A typed API contract shared by the backend and the web frontend
-- A DB layer that can't drift from its own migrations
-- A worked example domain (a shared todo list with an append-only activity log)
+It tracks two things per event, not one:
 
-It is a **fork target**, not a library — there's nothing to `go get` here.
-Clone it, follow the fork checklist, and end up with your own service.
+- **Actor** — *who* did the work (the identity attached to the API key
+  that reported it)
+- **Path** — *where* the work actually happened (the working directory
+  the agent was in, resolved to that directory's git root)
+
+Actor and Path are usually the same story — one person, one project. They
+diverge when an agent is asked to work outside its own directory: pointed
+at someone else's repo, or running on a shared machine alongside other
+agents. My Token itself is generic and doesn't know anything about any
+particular multi-agent setup — but that divergent case (an actor working
+outside its own path) is why Path exists as its own tracked dimension
+instead of being inferred from the actor alone.
+
+## How it works
+
+```
+Claude Code transcripts (*.jsonl)
+        │
+        ▼
+  collector (cmd/collector)   — scans configured paths, dedupes by
+        │                        message.id, resolves each session's
+        │                        git root, attributes actor + path + machine
+        ▼
+  core service (cmd/server)   — computes cost from a pricing table,
+        │                        stores usage_events
+        ▼
+  web dashboard                — usage by year/lifetime, a machines page,
+                                  API key management
+```
 
 ## Features
 
 - **Two auth paths, one identity model** — SSO session for a human owner,
-  long-lived API key (`Authorization: Bearer <key>`) for agents. Both
-  resolve to the same actor concept.
+  long-lived API key (`Authorization: Bearer <key>`) for agents and
+  collectors. Both resolve to the same actor concept.
 - **OpenAPI-first HTTP layer** — two hand-authored specs:
-  - `openapi.yaml` — Bearer-token public API for agents. Go server
-    interfaces only (`oapi-codegen`).
-  - `bff-openapi.yaml` — session-authenticated BFF for the web UI. Generates
-    *both* Go server interfaces and the frontend's TypeScript types
-    (`oapi-codegen` + `openapi-typescript`, same file). A field rename
-    breaks `go build` and `npm run typecheck` at every call site — nothing
-    silently drifts.
+  - `openapi.yaml` — Bearer-token public API (collector ingestion, key
+    management). Go server interfaces only (`oapi-codegen`).
+  - `bff-openapi.yaml` — session-authenticated BFF for the web UI.
+    Generates *both* Go server interfaces and the frontend's TypeScript
+    types (`oapi-codegen` + `openapi-typescript`, same file).
 - **Typed, generated DB access** — `sqlc` generates Go from hand-written
-  SQL; `goose` manages migrations. No ORM, no hand-rolled query builder.
-- **A working example domain** — a shared todo list (status, assignee,
-  priority, due date) with a single-write-path, append-only activity log.
-- **A minimal React SPA** — settings (API key management), the todo list,
-  and an activity feed. Talks to the BFF surface only.
+  SQL; `goose` manages migrations.
+- **A standalone collector** (`cmd/collector`) — recursively scans
+  configured directories for Claude Code transcripts, dedupes per-turn
+  usage by `message.id`, and POSTs new rows to the core service. Safe to
+  re-run: idempotent server-side, and keeps a local cache so a re-run only
+  parses new lines.
+- **A minimal React SPA** — usage (year/lifetime tabs), a machines page,
+  and settings (API key management). Talks to the BFF surface only.
 
 ### Tech stack
 
@@ -68,14 +85,41 @@ Clone it, follow the fork checklist, and end up with your own service.
 - Radix UI + Tailwind — components/styling
 - [openapi-typescript](https://openapi-ts.dev/) — TS types from `bff-openapi.yaml`
 
-## Requirements
+## Architecture
+
+Module-first layout, not layer-first: each domain owns its own
+repo/service code together, instead of being split across parallel
+`handlers/`, `services/`, `repos/` trees.
+
+- Request flow: handler → service → repo
+- Only `repo.go` may import the sqlc-generated package — domain types
+  stay independent of the DB schema by design, not by convention
+
+```
+internal/
+  domain/
+    usage/       # usage events, pricing, per-actor/machine summaries
+  collector/     # the scan-and-report pipeline cmd/collector runs
+  identity/      # auth: SSO session handling, API key issuance/verification
+  platform/      # config, DB connection, migrations
+  transport/
+    publicapi/   # Bearer-token surface, for the collector and other agents
+    bff/         # session-authenticated surface, for the web SPA
+web/             # React SPA (Vite), talks to internal/transport/bff only
+db/
+  migrations/    # goose
+  queries/       # sqlc source
+```
+
+## Local development
+
+### Requirements
 
 - Go 1.26+
 - Node.js 22+ (only needed to build/embed the web frontend)
-- A registered OAuth2/OIDC client for the SSO login path locally — see
-  [`docs/GETTING-STARTED.md`](docs/GETTING-STARTED.md) Step 1
+- A registered OAuth2/OIDC client for the SSO login path locally
 
-## Quickstart
+### Setup
 
 ```sh
 make tools      # installs pinned sqlc/goose/oapi-codegen into ./bin
@@ -95,49 +139,7 @@ SSO is unconfigured by default (`SSO_ISSUER`/`SSO_CLIENT_ID`/
 - The service runs on API-key auth alone.
 - The owner login path shows a "not configured" page until you set them.
 
-See [`docs/DEPLOY-REQUIREMENTS.md`](docs/DEPLOY-REQUIREMENTS.md) for what a
-real deployment needs.
-
-## Forking this template
-
-[`docs/GETTING-STARTED.md`](docs/GETTING-STARTED.md) is the actual fork
-checklist — five ordered steps:
-
-- SSO client registration
-- Module path / service name renames
-- Deleting the example `todo` domain
-- The invariants/tests that need attention when you do
-
-It's long because forking a running service touches more places than it
-looks like at first glance. Skipping a step leaves a specific trace (a dead
-login path, a stale module name, a leftover example handler). Read it start
-to finish — don't skim for the parts that look relevant.
-
-## Architecture
-
-Module-first layout, not layer-first: each domain (e.g.
-`internal/domain/todo`) owns its own repo/service code together, instead of
-being split across parallel `handlers/`, `services/`, `repos/` trees.
-
-- Request flow: handler → service → repo
-- Only `repo.go` may import the sqlc-generated package — domain types stay
-  independent of the DB schema by design, not by convention
-
-```
-internal/
-  domain/        # business logic, one subdirectory per domain (todo is the example)
-  identity/      # auth: SSO session handling, API key issuance/verification
-  platform/      # config, DB connection, migrations
-  transport/
-    publicapi/   # Bearer-token surface, for agents
-    bff/         # session-authenticated surface, for the web SPA
-web/             # React SPA (Vite), talks to internal/transport/bff only
-db/
-  migrations/    # goose
-  queries/       # sqlc source
-```
-
-## Testing
+### Testing
 
 ```sh
 make test         # go test ./... + the web test suite
@@ -145,9 +147,44 @@ make vet          # go vet ./...
 make smoke        # exercises a running instance (does not start one)
 ```
 
-Browser end-to-end tests live in `e2e/` — its own `package.json`, brings up
-a local OIDC issuer and a real instance of the service, tears both down.
-See `e2e/README.md`.
+Browser end-to-end tests live in `e2e/` — its own `package.json`, brings
+up a local OIDC issuer and a real instance of the service, tears both
+down. See `e2e/README.md`.
+
+## Running the collector
+
+The collector is a separate binary from the server — install it wherever
+you want usage tracked, point it at a running core service, and run it
+(by hand or on a schedule; it isn't a daemon itself):
+
+```sh
+go run ./cmd/collector -config /path/to/collector-config.json
+```
+
+Config file (`scan_paths`, `install_id`, `core_url`, `api_key`):
+
+```json
+{
+  "scan_paths": ["/home/you/projects"],
+  "core_url": "https://your-instance.example.com",
+  "api_key": "tpl_..."
+}
+```
+
+- `install_id` is generated and written back to the config file on first
+  run if absent — later runs reuse it.
+- A key is issued host-side: `go run ./cmd/issue-key <handle>`.
+- Safe to re-run on a schedule (cron, systemd timer): dedupes locally, and
+  the server is idempotent on each event's own id regardless.
+
+## Docs
+
+| Doc | Covers |
+| --- | --- |
+| [`docs/GETTING-STARTED.md`](docs/GETTING-STARTED.md) | ⚠️ predates this fork's specialization — still written as a generic fork checklist, due for a rewrite |
+| [`docs/DEPLOY-REQUIREMENTS.md`](docs/DEPLOY-REQUIREMENTS.md) | ⚠️ same — what a real deployment needs, not yet updated for this fork |
+| [`.claude/skills/my-token-api/SKILL.md`](.claude/skills/my-token-api/SKILL.md) | The `/api/v1` REST surface — auth, endpoints, the collector's own ingestion call |
+| [`e2e/README.md`](e2e/README.md) | Running the browser end-to-end suite |
 
 ## License
 
