@@ -49,6 +49,26 @@ type Querier interface {
 	// (ListAllAgentAPIKeysRow) is scoped to this one query only; every other
 	// query in this file keeps returning bare db.ApiKey, unaffected.
 	ListAllAgentAPIKeys(ctx context.Context) ([]ListAllAgentAPIKeysRow, error)
+	// story-3/ticket-1: every machines row's lifetime summary -- backs
+	// GET /api/bff/machines (contract's Data model, copied verbatim from
+	// there). Unlike ListMachines/ListScanRoots above (a bare label lookup,
+	// joined against usage_events in Go), this query does its own
+	// aggregation and hostname pairing entirely in SQL: there is no existing
+	// pure Go aggregation function (summary.go's Aggregate) this could reuse
+	// instead, since Aggregate is window-scoped and this is deliberately
+	// lifetime-scoped with no window argument at all -- a single round trip
+	// is simpler than fetching every usage_events row ever written just to
+	// sum it in Go.
+	//
+	// LEFT JOIN + COALESCE are defensive, not load-bearing: a machines row is
+	// only ever created alongside at least one usage_events row today (the
+	// collector's own early-return on zero events, internal/collector/
+	// collector.go), but this guarantees a machine with no matching
+	// usage_events rows still comes back as one zeroed row rather than being
+	// silently dropped or erroring, if that ever stops being true. Ordered
+	// last_seen_at DESC -- "Last reported" descending, already the order the
+	// console page needs, no client-side re-sort required.
+	ListMachineSummaries(ctx context.Context) ([]ListMachineSummariesRow, error)
 	// Every known machine's install_id -> hostname mapping -- the "By
 	// machine" breakdown's own label lookup (internal/domain/usage/
 	// service.go's Summary, when group_by=machine substitutes each
@@ -60,12 +80,41 @@ type Querier interface {
 	// reuses that logic instead of re-deriving group_by/window aggregation
 	// in SQL.
 	ListMachines(ctx context.Context) ([]ListMachinesRow, error)
+	// story-2/ticket-9: every registered scan_roots row across every
+	// reporting install -- GET /api/bff/usage/scan-roots' own read path
+	// (internal/domain/usage/service.go's Service.ScanRoots), populating the
+	// console's future scan-root filter dropdown (ticket 11). No window
+	// filter, no group_by -- this table is not usage_events, it's a small
+	// upserted label table (mirrors ListMachines in machines.sql). The
+	// install_id -> hostname join happens in Go over this result
+	// (Service.ScanRoots, reusing the existing MachineHostnames query), not
+	// as a SQL JOIN here -- same reasoning ListMachines' own doc comment
+	// gives: reuse the pure aggregation/substitution logic that already
+	// exists rather than re-deriving a join in SQL.
+	//
+	// story-3/ticket-2: also selects source_type -- already a real column
+	// (story-2/ticket-8), just never selected here since ticket-9 only
+	// needed this query for the filter dropdown, which doesn't display it.
+	ListScanRoots(ctx context.Context) ([]ListScanRootsRow, error)
 	// story-1/ticket-14: every event whose created_at falls between the two
 	// bound parameters below, range_start inclusive, range_end exclusive.
 	// The raw rows behind the console's own read surface --
 	// internal/domain/usage/summary.go's Aggregate does the group_by/window
 	// math in Go, pure and unit-testable without sqlc/a real database; this
-	// query's only job is the window filter itself.
+	// query's own job is the window/machine/scan_root filters.
+	//
+	// story-2/ticket-10 adds two optional filters, AND-composed with the
+	// window bound and with each other: machine (the raw install_id) and
+	// the scan_root pair (scan_root_install_id + scan_root_path together --
+	// internal/domain/usage/repo.go decomposes the wire's own
+	// <install_id>:<scan_root_path> composite into these two arguments
+	// before this query ever runs, same machine-prefix convention ticket 7
+	// established for group_by=path, contract's API surface section). Each
+	// narg is NULL when its own filter was not requested --
+	// "sqlc.narg(x) IS NULL OR column = sqlc.narg(x)" is the standard
+	// optional-filter idiom, so one query text covers "no filter"/"one
+	// filter"/"both filters" without a query-builder assembling different
+	// SQL per case.
 	ListUsageEventsInWindow(ctx context.Context, arg ListUsageEventsInWindowParams) ([]ListUsageEventsInWindowRow, error)
 	RevokeAPIKey(ctx context.Context, arg RevokeAPIKeyParams) (ApiKey, error)
 	// The owner-facing revoke endpoint's own query (I21): session-gated to a

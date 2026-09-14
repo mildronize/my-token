@@ -112,3 +112,28 @@ func TestLoadOrInitConfig_ExplicitSourceTypeIsNotOverridden(t *testing.T) {
 	require.Len(t, cfg.ScanPaths, 1)
 	assert.Equal(t, "future_source", cfg.ScanPaths[0].SourceType)
 }
+
+func TestResolveHostname_ConfiguredValueWins_OSHostnameNeverCalled(t *testing.T) {
+	called := false
+	osHostname := func() (string, error) {
+		called = true
+		return "real-os-hostname", nil
+	}
+
+	got, err := ResolveHostname(Config{Hostname: "thw-home-openrouter"}, osHostname)
+	require.NoError(t, err)
+	assert.Equal(t, "thw-home-openrouter", got)
+	assert.False(t, called, "a configured Hostname must short-circuit before osHostname is ever invoked")
+}
+
+func TestResolveHostname_EmptyConfig_FallsBackToOSHostname(t *testing.T) {
+	got, err := ResolveHostname(Config{}, func() (string, error) { return "real-os-hostname", nil })
+	require.NoError(t, err)
+	assert.Equal(t, "real-os-hostname", got)
+}
+
+func TestResolveHostname_EmptyConfig_OSHostnameErrors_PropagatesError(t *testing.T) {
+	wantErr := assert.AnError
+	_, err := ResolveHostname(Config{}, func() (string, error) { return "", wantErr })
+	assert.ErrorIs(t, err, wantErr)
+}

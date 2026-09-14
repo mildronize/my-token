@@ -105,19 +105,19 @@ func (e GetUsageSummaryParamsWindow) Valid() bool {
 
 // Defines values for GetUsageSummaryParamsGroupBy.
 const (
-	Actor   GetUsageSummaryParamsGroupBy = "actor"
-	Machine GetUsageSummaryParamsGroupBy = "machine"
-	Path    GetUsageSummaryParamsGroupBy = "path"
+	GetUsageSummaryParamsGroupByActor   GetUsageSummaryParamsGroupBy = "actor"
+	GetUsageSummaryParamsGroupByMachine GetUsageSummaryParamsGroupBy = "machine"
+	GetUsageSummaryParamsGroupByPath    GetUsageSummaryParamsGroupBy = "path"
 )
 
 // Valid indicates whether the value is a known member of the GetUsageSummaryParamsGroupBy enum.
 func (e GetUsageSummaryParamsGroupBy) Valid() bool {
 	switch e {
-	case Actor:
+	case GetUsageSummaryParamsGroupByActor:
 		return true
-	case Machine:
+	case GetUsageSummaryParamsGroupByMachine:
 		return true
-	case Path:
+	case GetUsageSummaryParamsGroupByPath:
 		return true
 	default:
 		return false
@@ -149,6 +149,36 @@ type Error struct {
 	} `json:"error"`
 }
 
+// Machine story-3/ticket-1: one row of GET /machines. Named Machine, not MachineSummary, deliberately distinct from the domain-layer usage.MachineSummary it's generated alongside (internal/domain/ usage/repo.go) — same "distinct name per layer" convention ScanRootRecord/ScanRootWithHostname/UsageScanRoot already establish, so a reader/grep is never left guessing which package's type a bare "MachineSummary" means. Field names are snake_case verbatim from the contract's own API surface section, same break from this spec's otherwise-camelCase convention as UsageScanRoot above (this usage domain's own established exception — see getUsageSummary's own doc comment for why).
+type Machine struct {
+	// CollectedActors COUNT(DISTINCT usage_events.actor) this machine has reported — "Collected Actors" on the console, same "plain count" naming as collected_paths.
+	CollectedActors int64 `json:"collected_actors"`
+
+	// CollectedPaths COUNT(DISTINCT usage_events.path) this machine has reported — "Collected Paths" on the console, a plain count, not an inference (goal's point 3).
+	CollectedPaths int64 `json:"collected_paths"`
+
+	// Hostname machines.hostname for this row's install_id — always present (machines.hostname is NOT NULL; no fallback needed the way UsageScanRoot's own hostname sometimes does).
+	Hostname string `json:"hostname"`
+
+	// InstallId The reporting install's raw install_id — always present, reachable via a tooltip on the console (goal's point 3).
+	InstallId string `json:"install_id"`
+
+	// LastSeenAt machines.last_seen_at verbatim — stamped by the server's own clock at ingestion time, deliberately NOT MAX(usage_events.created_at) (contract's Data model: "Last reported" answers "is this machine's collector still alive," a different question from "when did a person last actually use it").
+	LastSeenAt time.Time `json:"last_seen_at"`
+
+	// LifetimeCost SUM(usage_events.cost) across every event this machine has ever reported, 0 (not null) when it has none.
+	LifetimeCost float64 `json:"lifetime_cost"`
+
+	// LifetimeTokens SUM of all four token columns (input + output + cache_read + cache_creation) across every event this machine has ever reported, 0 (not null) when it has none.
+	LifetimeTokens int64 `json:"lifetime_tokens"`
+}
+
+// MachineList defines model for MachineList.
+type MachineList struct {
+	// Machines Every machine's lifetime summary, sorted last_seen_at descending.
+	Machines []Machine `json:"machines"`
+}
+
 // Me defines model for Me.
 type Me struct {
 	Active bool   `json:"active"`
@@ -167,6 +197,30 @@ type UsageBreakdownRow struct {
 	RawKey *string `json:"raw_key,omitempty"`
 	Tokens int64   `json:"tokens"`
 	Turns  int64   `json:"turns"`
+}
+
+// UsageScanRoot story-2/ticket-9: one row of GET /usage/scan-roots. Field names are snake_case verbatim from the contract's own API surface section, matching the rest of this usage domain's own break from this spec's otherwise-camelCase convention (see getUsageSummary's own doc comment for why). story-3/ticket-2 adds `source_type`, additive to ticket-9's own shape (already a real column on `scan_roots` — story-2/ticket-8 — just never selected/exposed here since ticket-9 only needed this endpoint for the filter dropdown, which doesn't display it); no existing consumer needs to change.
+type UsageScanRoot struct {
+	// Hostname machines.hostname for this row's install_id, falling back to the raw install_id itself if no corresponding machines row exists (never a blank label).
+	Hostname string `json:"hostname"`
+
+	// InstallId The reporting install's raw install_id — always present, even when hostname had to fall back to it.
+	InstallId string `json:"install_id"`
+
+	// Name The operator-assigned label for this scan root (per-install, no shared/global naming registry across machines).
+	Name string `json:"name"`
+
+	// ScanRootPath The raw scan-root path, as configured in the collector's own scan_paths.
+	ScanRootPath string `json:"scan_root_path"`
+
+	// SourceType A declared category at config time (defaults to "claude_code" if the collector's own config omitted it) — same value ingested via the batch's own `scan_roots[]. source_type` (openapi.yaml's `ScanRootInput`), read back verbatim here (story-3/ticket-2).
+	SourceType string `json:"source_type"`
+}
+
+// UsageScanRootList defines model for UsageScanRootList.
+type UsageScanRootList struct {
+	// ScanRoots Every registered scan root across every reporting install.
+	ScanRoots []UsageScanRoot `json:"scan_roots"`
 }
 
 // UsageSummary defines model for UsageSummary.
@@ -232,6 +286,12 @@ type Unauthorized = Error
 type GetUsageSummaryParams struct {
 	Window  GetUsageSummaryParamsWindow  `form:"window" json:"window"`
 	GroupBy GetUsageSummaryParamsGroupBy `form:"group_by" json:"group_by"`
+
+	// Machine story-2/ticket-10: optional install_id filter. When set, scopes `totals`/`breakdown`/`reporting_installs` to only events reported by this machine -- not just one panel's own dimension (contract's Console filters section: global, not per-panel). AND-composed with `window` and with `scan_root` when both are set. Absent means no machine constraint.
+	Machine *string `form:"machine,omitempty" json:"machine,omitempty"`
+
+	// ScanRoot story-2/ticket-10: optional composite `<install_id>:<scan_root_path>` filter -- same machine-prefix convention as `group_by=path`'s own cross-machine fix (ticket 7), for the identical reason: a bare scan-root path/name is ambiguous across machines since naming is per-install (contract's Data model). AND-composed with `window` and with `machine` when both are set. An invalid shape, or a well-formed but non-existent `install_id:scan_root_path` pair, yields an empty/zero result -- not a 400 -- mirroring this API's existing "no matching data" tolerance versus a malformed request.
+	ScanRoot *string `form:"scan_root,omitempty" json:"scan_root,omitempty"`
 }
 
 // GetUsageSummaryParamsWindow defines parameters for GetUsageSummary.
@@ -239,6 +299,15 @@ type GetUsageSummaryParamsWindow string
 
 // GetUsageSummaryParamsGroupBy defines parameters for GetUsageSummary.
 type GetUsageSummaryParamsGroupBy string
+
+// GetUsageWindowsParams defines parameters for GetUsageWindows.
+type GetUsageWindowsParams struct {
+	// Machine story-2/ticket-10 -- same optional install_id filter as getUsageSummary's own `machine` parameter.
+	Machine *string `form:"machine,omitempty" json:"machine,omitempty"`
+
+	// ScanRoot story-2/ticket-10 -- same optional `<install_id>:<scan_root_path>` filter as getUsageSummary's own `scan_root` parameter.
+	ScanRoot *string `form:"scan_root,omitempty" json:"scan_root,omitempty"`
+}
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
@@ -248,15 +317,21 @@ type ServerInterface interface {
 	// RevokeKey Revoke any agent's API key by id (I21).
 	// (DELETE /keys/{id})
 	RevokeKey(c *gin.Context, id string)
+	// GetMachines Every machine's lifetime summary, sorted by last reported descending.
+	// (GET /machines)
+	GetMachines(c *gin.Context)
 	// GetMe Session-check endpoint backing the SPA's AuthGate-equivalent hook.
 	// (GET /me)
 	GetMe(c *gin.Context)
+	// GetUsageScanRoots Every registered scan root across every reporting install.
+	// (GET /usage/scan-roots)
+	GetUsageScanRoots(c *gin.Context)
 	// GetUsageSummary Usage totals and one-dimension breakdown for a time window.
 	// (GET /usage/summary)
 	GetUsageSummary(c *gin.Context, params GetUsageSummaryParams)
 	// GetUsageWindows Turns/tokens/cost for each of the fixed 5h/24h/today/week/month/year/lifetime windows.
 	// (GET /usage/windows)
-	GetUsageWindows(c *gin.Context)
+	GetUsageWindows(c *gin.Context, params GetUsageWindowsParams)
 	// ListUsers List every active user, either role.
 	// (GET /users)
 	ListUsers(c *gin.Context)
@@ -309,6 +384,19 @@ func (siw *ServerInterfaceWrapper) RevokeKey(c *gin.Context) {
 	siw.Handler.RevokeKey(c, id)
 }
 
+// GetMachines operation middleware
+func (siw *ServerInterfaceWrapper) GetMachines(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetMachines(c)
+}
+
 // GetMe operation middleware
 func (siw *ServerInterfaceWrapper) GetMe(c *gin.Context) {
 
@@ -320,6 +408,19 @@ func (siw *ServerInterfaceWrapper) GetMe(c *gin.Context) {
 	}
 
 	siw.Handler.GetMe(c)
+}
+
+// GetUsageScanRoots operation middleware
+func (siw *ServerInterfaceWrapper) GetUsageScanRoots(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetUsageScanRoots(c)
 }
 
 // GetUsageSummary operation middleware
@@ -347,6 +448,22 @@ func (siw *ServerInterfaceWrapper) GetUsageSummary(c *gin.Context) {
 		return
 	}
 
+	// ------------- Optional query parameter "machine" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "machine", c.Request.URL.Query(), &params.Machine, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter machine: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "scan_root" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "scan_root", c.Request.URL.Query(), &params.ScanRoot, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter scan_root: %w", err), http.StatusBadRequest)
+		return
+	}
+
 	for _, middleware := range siw.HandlerMiddlewares {
 		middleware(c)
 		if c.IsAborted() {
@@ -360,6 +477,28 @@ func (siw *ServerInterfaceWrapper) GetUsageSummary(c *gin.Context) {
 // GetUsageWindows operation middleware
 func (siw *ServerInterfaceWrapper) GetUsageWindows(c *gin.Context) {
 
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetUsageWindowsParams
+
+	// ------------- Optional query parameter "machine" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "machine", c.Request.URL.Query(), &params.Machine, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter machine: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "scan_root" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "scan_root", c.Request.URL.Query(), &params.ScanRoot, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter scan_root: %w", err), http.StatusBadRequest)
+		return
+	}
+
 	for _, middleware := range siw.HandlerMiddlewares {
 		middleware(c)
 		if c.IsAborted() {
@@ -367,7 +506,7 @@ func (siw *ServerInterfaceWrapper) GetUsageWindows(c *gin.Context) {
 		}
 	}
 
-	siw.Handler.GetUsageWindows(c)
+	siw.Handler.GetUsageWindows(c, params)
 }
 
 // ListUsers operation middleware
@@ -416,6 +555,8 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/users", wrapper.ListUsers)
 	router.GET(options.BaseURL+"/usage/summary", wrapper.GetUsageSummary)
 	router.GET(options.BaseURL+"/usage/windows", wrapper.GetUsageWindows)
+	router.GET(options.BaseURL+"/usage/scan-roots", wrapper.GetUsageScanRoots)
+	router.GET(options.BaseURL+"/machines", wrapper.GetMachines)
 }
 
 // Base64 encoded, compressed with deflate, json marshaled OpenAPI spec.
@@ -423,90 +564,127 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
-	"u4kIKDeIhHe13mQXWff3RNnN7zf/FwAA//8=",
+	"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",
+	"Q5qdewH97R0f8RtTJVdJ/FnY5NMvn/5vAAAA//8=",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

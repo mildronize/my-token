@@ -3,8 +3,9 @@
 // (https://claude.ai/code/artifact/c1382132-8662-490a-9e7a-8d7d8f20ea6d)
 // and the contract's "Console display rules" section.
 //
-// Query plan (six requests per load/window change, all independently
-// cacheable by TanStack Query — see ~/lib/usage.ts's query keys):
+// Query plan (six requests per load/window/filter change, all
+// independently cacheable by TanStack Query — see ~/lib/usage.ts's query
+// keys), plus two more added by story-2/ticket-11 (below):
 //   - lifetimeByActor (window=lifetime, group_by=actor): tile 1's cost +
 //     actor count, tile 3's total tokens.
 //   - lifetimeByPath (window=lifetime, group_by=path): tile 1's path
@@ -21,6 +22,16 @@
 //     (story-1/ticket-20: grew from five rows to seven — year and
 //     lifetime are now both real, selectable tabs too).
 //
+// story-2/ticket-11 (console filters) additions:
+//   - Every one of the six requests above grows two new optional params,
+//     `machine`/`scanRoot` (contract's "Console filters" section: global
+//     scoping, not per-panel) — see useUsageFilters.ts for their
+//     localStorage persistence.
+//   - machineOptionsQuery (window=selectedWindow, group_by=machine,
+//     scanRoot only — never `machine`) and scanRootsQuery (GET
+//     /usage/scan-roots, no params ever) exist purely to populate the two
+//     filter dropdowns' own option lists; see UsageFilters.tsx.
+//
 // Known gap, flagged rather than worked around: the approved mockup's
 // top bar also shows a "host" pill (e.g. `host thw-home`). No hostname
 // is available to this endpoint to show — ticket 11's own ingestion
@@ -31,34 +42,84 @@
 // 14's) — the host pill is omitted here rather than fabricating a value
 // or silently repurposing `machine` (the install_id) as a stand-in for
 // a hostname, which it isn't. See ticket-14-report.md's Decision section.
-import { useState } from "react";
+import { useEffect } from "react";
 
 import "~/styles/usage-console.css";
 import { ErrorState } from "~/components/ErrorState";
 import { Spinner } from "~/components/ui/spinner";
-import {
-  useUsageSummaryQuery,
-  useUsageWindowsQuery,
-  type UsageWindow,
-} from "~/lib/usage";
+import { useUsageSummaryQuery, useUsageWindowsQuery, useUsageScanRootsQuery } from "~/lib/usage";
+import { useUsageFilters } from "./useUsageFilters";
+import { UsageFilters, machineOptionsFromBreakdown, scanRootOptionsFromList } from "./UsageFilters";
 import { WindowTabs } from "./WindowTabs";
 import { SummaryTiles } from "./SummaryTiles";
 import { WindowsTable } from "./WindowsTable";
 import { BreakdownPanel } from "./BreakdownPanel";
 
-const DEFAULT_WINDOW: UsageWindow = "today";
-
 export default function UsagePage() {
-  const [selectedWindow, setSelectedWindow] = useState<UsageWindow>(DEFAULT_WINDOW);
+  // story-2/ticket-11: the console's two new filters (contract's "Console
+  // filters" section) — persisted to localStorage (useUsageFilters), AND
+  // composed with each other and with `window`, applied globally below
+  // (every panel's own query grows the same two optional params, not just
+  // one panel's).
+  //
+  // story-2/ticket-15: the window tab now persists too (useUsageFilters
+  // owns all three — machine/scanRoot/window are the same kind of state,
+  // same get/set/persist shape).
+  const { machine, scanRoot, window: selectedWindow, setMachine, setScanRoot, setWindow: setSelectedWindow } = useUsageFilters();
+  const filters = { machine, scanRoot };
 
-  const lifetimeByActor = useUsageSummaryQuery("lifetime", "actor");
-  const lifetimeByPath = useUsageSummaryQuery("lifetime", "path");
-  const windowByActor = useUsageSummaryQuery(selectedWindow, "actor");
-  const windowByPath = useUsageSummaryQuery(selectedWindow, "path");
-  const windowByMachine = useUsageSummaryQuery(selectedWindow, "machine");
-  const windowsTable = useUsageWindowsQuery();
+  const lifetimeByActor = useUsageSummaryQuery("lifetime", "actor", filters);
+  const lifetimeByPath = useUsageSummaryQuery("lifetime", "path", filters);
+  const windowByActor = useUsageSummaryQuery(selectedWindow, "actor", filters);
+  const windowByPath = useUsageSummaryQuery(selectedWindow, "path", filters);
+  const windowByMachine = useUsageSummaryQuery(selectedWindow, "machine", filters);
+  const windowsTable = useUsageWindowsQuery(filters);
 
-  const queries = [lifetimeByActor, lifetimeByPath, windowByActor, windowByPath, windowByMachine, windowsTable];
+  // machineOptionsQuery backs the machine filter's own dropdown (contract:
+  // "options come from the existing group_by=machine breakdown response")
+  // — deliberately NOT scoped by `machine` itself, so the option list
+  // stays complete once a machine is selected instead of collapsing to a
+  // single row. It IS scoped by `scanRoot`, same as every panel above.
+  // When no machine is selected this is the exact same request as
+  // windowByMachine (TanStack Query dedupes identical cache keys) — the
+  // two only diverge, and only then fetch separately, once a machine
+  // filter is actually active.
+  const machineOptionsQuery = useUsageSummaryQuery(selectedWindow, "machine", { scanRoot });
+  const scanRootsQuery = useUsageScanRootsQuery();
+
+  // Reconcile a value restored from localStorage against the real data
+  // once it has actually loaded (contract: "An invalid/stale stored value
+  // ... is dropped silently on restore ... falls back to 'no filter' the
+  // same way a first-ever visit would"). There's no way to validate a
+  // restored value before this data exists, so the very first fetch after
+  // a reload still optimistically includes it — these effects are what
+  // clear it once the option list proves it's gone. Validity is checked
+  // against the very same `.value` the dropdown's own options use
+  // (machineOptionsFromBreakdown/scanRootOptionsFromList) rather than
+  // re-deriving the key shape here — one definition of "what counts as
+  // this filter's identity," not two that could quietly drift apart.
+  useEffect(() => {
+    if (!machineOptionsQuery.data || machine === undefined) return;
+    const options = machineOptionsFromBreakdown(machineOptionsQuery.data.breakdown);
+    if (!options.some((o) => o.value === machine)) setMachine(undefined);
+  }, [machineOptionsQuery.data, machine, setMachine]);
+
+  useEffect(() => {
+    if (!scanRootsQuery.data || scanRoot === undefined) return;
+    const options = scanRootOptionsFromList(scanRootsQuery.data.scan_roots);
+    if (!options.some((o) => o.value === scanRoot)) setScanRoot(undefined);
+  }, [scanRootsQuery.data, scanRoot, setScanRoot]);
+
+  const queries = [
+    lifetimeByActor,
+    lifetimeByPath,
+    windowByActor,
+    windowByPath,
+    windowByMachine,
+    windowsTable,
+    machineOptionsQuery,
+    scanRootsQuery,
+  ];
   const isLoading = queries.some((q) => q.isLoading);
   const firstError = queries.find((q) => q.isError);
 
@@ -76,7 +137,17 @@ export default function UsagePage() {
   // TypeScript actually narrows each named query's own `.data` to
   // non-undefined below — a array-based check can't narrow the
   // individually-named bindings the JSX further down reads directly.
-  if (firstError || !lifetimeByActor.data || !lifetimeByPath.data || !windowByActor.data || !windowByPath.data || !windowByMachine.data || !windowsTable.data) {
+  if (
+    firstError ||
+    !lifetimeByActor.data ||
+    !lifetimeByPath.data ||
+    !windowByActor.data ||
+    !windowByPath.data ||
+    !windowByMachine.data ||
+    !windowsTable.data ||
+    !machineOptionsQuery.data ||
+    !scanRootsQuery.data
+  ) {
     return (
       <div className="usage-console">
         <ErrorState
@@ -101,6 +172,14 @@ export default function UsagePage() {
             <span className="dot" />
             <strong>{reportingInstalls}</strong> install{reportingInstalls === 1 ? "" : "s"} reporting
           </span>
+          <UsageFilters
+            machineOptions={machineOptionsFromBreakdown(machineOptionsQuery.data.breakdown)}
+            scanRootOptions={scanRootOptionsFromList(scanRootsQuery.data.scan_roots)}
+            selectedMachine={machine}
+            selectedScanRoot={scanRoot}
+            onMachineChange={setMachine}
+            onScanRootChange={setScanRoot}
+          />
           <WindowTabs value={selectedWindow} onChange={setSelectedWindow} />
         </div>
       </div>
@@ -125,12 +204,14 @@ export default function UsagePage() {
             groupBy="actor"
             breakdown={windowByActor.data.breakdown}
             totalsCost={windowByActor.data.totals.cost}
+            activeMachine={machine}
           />
           <BreakdownPanel
             title="By path"
             groupBy="path"
             breakdown={windowByPath.data.breakdown}
             totalsCost={windowByPath.data.totals.cost}
+            activeMachine={machine}
           />
           <BreakdownPanel
             title="By machine"

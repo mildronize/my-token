@@ -47,8 +47,33 @@ type Config struct {
 	// Generated on first run if absent, then persisted back to this same
 	// file so every later run reuses it.
 	InstallID string `json:"install_id,omitempty"`
-	CoreURL   string `json:"core_url"`
-	APIKey    string `json:"api_key"`
+	// Hostname overrides the machine label this install reports (story-1
+	// ticket 18's "machines" display label) instead of trusting the OS's
+	// own hostname. Optional — empty means fall back to the real OS
+	// hostname (ResolveHostname, below). Exists for the case this
+	// install's own OS hostname would collide with another install's
+	// (e.g. two collector configs running side by side on one physical
+	// host for local testing) — a raw OS hostname can never disambiguate
+	// that, only an operator can.
+	Hostname string `json:"hostname,omitempty"`
+	CoreURL  string `json:"core_url"`
+	APIKey   string `json:"api_key"`
+}
+
+// ResolveHostname returns cfg's configured Hostname if non-empty,
+// otherwise falls back to osHostname() (injected so this is unit
+// testable without depending on the real machine's own hostname, the
+// same reasoning GitRootResolver is injected rather than called
+// directly). A real os.Hostname() failure with no configured override is
+// reported up rather than silently swallowed into a placeholder — the
+// caller (cmd/collector) decides what "no hostname at all" degrades to,
+// same division of responsibility as every other fallback in this
+// package.
+func ResolveHostname(cfg Config, osHostname func() (string, error)) (string, error) {
+	if cfg.Hostname != "" {
+		return cfg.Hostname, nil
+	}
+	return osHostname()
 }
 
 // LoadOrInitConfig reads the JSON config at path. If it has no

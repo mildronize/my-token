@@ -241,6 +241,11 @@ func TestAggregate_EmptyInput_ZeroTotalsNoBreakdownNoInstalls(t *testing.T) {
 	assert.Equal(t, int64(0), got.ReportingInstalls)
 }
 
+// story-2/ticket-16 makes GroupByActor's key machine-prefixed too
+// (`<machine>:<actor>`), same reason and shape as GroupByPath's own
+// ticket-7 fix — all three events here share the same machine, so the
+// prefix doesn't change which rows collapse together, just the key
+// string itself.
 func TestAggregate_ByActor_SumsTokensCostTurnsPerActor(t *testing.T) {
 	events := []Event{
 		ev("freya", "p1", "m1", 100, 50, 10, 5, 1.0), // tokens=165
@@ -255,12 +260,12 @@ func TestAggregate_ByActor_SumsTokensCostTurnsPerActor(t *testing.T) {
 
 	require.Len(t, got.Breakdown, 2)
 	// cost descending: freya (3.0) before nicole (0.1)
-	assert.Equal(t, "freya", got.Breakdown[0].Key)
+	assert.Equal(t, "m1:freya", got.Breakdown[0].Key)
 	assert.Equal(t, int64(365), got.Breakdown[0].Tokens)
 	assert.InDelta(t, 3.0, got.Breakdown[0].Cost, 1e-9)
 	assert.Equal(t, int64(2), got.Breakdown[0].Turns)
 
-	assert.Equal(t, "nicole", got.Breakdown[1].Key)
+	assert.Equal(t, "m1:nicole", got.Breakdown[1].Key)
 	assert.Equal(t, int64(20), got.Breakdown[1].Tokens)
 	assert.InDelta(t, 0.1, got.Breakdown[1].Cost, 1e-9)
 	assert.Equal(t, int64(1), got.Breakdown[1].Turns)
@@ -306,6 +311,26 @@ func TestAggregate_ByPath_CrossMachineIdenticalPath_ProducesDistinctRows(t *test
 	assert.InDelta(t, 1.0, got.Breakdown[1].Cost, 1e-9)
 }
 
+// TestAggregate_ByActor_CrossMachineIdenticalActor_ProducesDistinctRows is
+// story-2/ticket-16's own direct regression test for the actor-side false-
+// merge bug, mirroring TestAggregate_ByPath_CrossMachineIdenticalPath_
+// ProducesDistinctRows exactly: two machines reporting the identical raw
+// actor string (a real, not hypothetical, case for two collector installs
+// sharing one filesystem — มายด์'s own finding) must not silently merge.
+func TestAggregate_ByActor_CrossMachineIdenticalActor_ProducesDistinctRows(t *testing.T) {
+	events := []Event{
+		ev("/home/thw-home/.typ-crews/naomi", "p1", "install-a", 100, 0, 0, 0, 1.0),
+		ev("/home/thw-home/.typ-crews/naomi", "p2", "install-b", 100, 0, 0, 0, 3.0),
+	}
+	got := Aggregate(events, GroupByActor)
+
+	require.Len(t, got.Breakdown, 2, "the exact same literal actor path from two machines must not silently merge into one row")
+	assert.Equal(t, "install-b:/home/thw-home/.typ-crews/naomi", got.Breakdown[0].Key, "higher cost first")
+	assert.InDelta(t, 3.0, got.Breakdown[0].Cost, 1e-9)
+	assert.Equal(t, "install-a:/home/thw-home/.typ-crews/naomi", got.Breakdown[1].Key)
+	assert.InDelta(t, 1.0, got.Breakdown[1].Cost, 1e-9)
+}
+
 // --- Aggregate: Path/actor dedup (story-2/ticket-7, contract's
 // "Path/actor dedup" section, new — no story-1 precedent) --------------
 
@@ -348,7 +373,7 @@ func TestAggregate_ByPath_ActorPathDedup_OnlyAppliesToGroupByPath(t *testing.T) 
 
 	byActor := Aggregate(events, GroupByActor)
 	require.Len(t, byActor.Breakdown, 1)
-	assert.Equal(t, "/home/thw-home/gits/my-token", byActor.Breakdown[0].Key)
+	assert.Equal(t, "install-a:/home/thw-home/gits/my-token", byActor.Breakdown[0].Key, "story-2/ticket-16: GroupByActor's key is machine-prefixed too")
 
 	byMachine := Aggregate(events, GroupByMachine)
 	require.Len(t, byMachine.Breakdown, 1)
@@ -377,8 +402,8 @@ func TestAggregate_BreakdownTieBrokenByKeyAscending(t *testing.T) {
 	}
 	got := Aggregate(events, GroupByActor)
 	require.Len(t, got.Breakdown, 2)
-	assert.Equal(t, "alpha", got.Breakdown[0].Key)
-	assert.Equal(t, "zeta", got.Breakdown[1].Key)
+	assert.Equal(t, "m:alpha", got.Breakdown[0].Key)
+	assert.Equal(t, "m:zeta", got.Breakdown[1].Key)
 }
 
 // --- Aggregate: reporting_installs (window-scoped, not lifetime) -------

@@ -20,3 +20,21 @@
 -- other non-ASCII punctuation in this file.
 INSERT OR REPLACE INTO scan_roots (install_id, scan_root_path, name, source_type, last_seen_at)
 VALUES (?, ?, ?, ?, ?);
+
+-- name: ListScanRoots :many
+-- story-2/ticket-9: every registered scan_roots row across every
+-- reporting install -- GET /api/bff/usage/scan-roots' own read path
+-- (internal/domain/usage/service.go's Service.ScanRoots), populating the
+-- console's future scan-root filter dropdown (ticket 11). No window
+-- filter, no group_by -- this table is not usage_events, it's a small
+-- upserted label table (mirrors ListMachines in machines.sql). The
+-- install_id -> hostname join happens in Go over this result
+-- (Service.ScanRoots, reusing the existing MachineHostnames query), not
+-- as a SQL JOIN here -- same reasoning ListMachines' own doc comment
+-- gives: reuse the pure aggregation/substitution logic that already
+-- exists rather than re-deriving a join in SQL.
+--
+-- story-3/ticket-2: also selects source_type -- already a real column
+-- (story-2/ticket-8), just never selected here since ticket-9 only
+-- needed this query for the filter dropdown, which doesn't display it.
+SELECT install_id, scan_root_path, name, source_type FROM scan_roots;

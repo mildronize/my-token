@@ -49,6 +49,94 @@ describe("BreakdownPanel — group_by=machine", () => {
   });
 });
 
+// story-2/ticket-14: group_by=actor's key is the session's raw launch cwd
+// (ticket 7 removed the `.typ-crews/<name>` regex), so it needs the same
+// basename+tooltip shortening `path` already gets. story-2/ticket-16
+// further makes the key machine-prefixed (`<machine>:<actor>`) for the
+// same cross-machine false-merge reason `path` was fixed for — so these
+// tests now mirror the `group_by=path` block below exactly, just over an
+// actor value instead of a path.
+describe("BreakdownPanel — group_by=actor", () => {
+  it("shows the hostname-prefixed, shortened actor as the label and the raw install_id:actor as the tooltip", () => {
+    render(
+      <BreakdownPanel
+        title="By actor"
+        groupBy="actor"
+        totalsCost={1}
+        breakdown={[
+          row({ key: "thw-home:/home/thw-home/.typ-crews/naomi", raw_key: "install-a-uuid:/home/thw-home/.typ-crews/naomi", cost: 1, tokens: 100, turns: 1 }),
+        ]}
+      />,
+    );
+
+    const label = screen.getByText("thw-home: naomi");
+    expect(label).toBeInTheDocument();
+    expect(label).toHaveAttribute("title", "install-a-uuid:/home/thw-home/.typ-crews/naomi");
+  });
+
+  it("falls back to key itself as the tooltip when raw_key is absent (no machines row)", () => {
+    render(
+      <BreakdownPanel
+        title="By actor"
+        groupBy="actor"
+        totalsCost={1}
+        breakdown={[row({ key: "install-orphan:/home/thw-home/.typ-crews/naomi", cost: 1, tokens: 100, turns: 1 })]}
+      />,
+    );
+
+    const label = screen.getByText("install-orphan: naomi");
+    expect(label).toHaveAttribute("title", "install-orphan:/home/thw-home/.typ-crews/naomi");
+  });
+
+  it("two machines' identical raw actor path render as two distinct rows via their own hostname prefix", () => {
+    render(
+      <BreakdownPanel
+        title="By actor"
+        groupBy="actor"
+        totalsCost={4}
+        breakdown={[
+          row({ key: "thw-home:/home/thw-home/.typ-crews/naomi", cost: 3, tokens: 100, turns: 1 }),
+          row({ key: "thw-home-openrouter:/home/thw-home/.typ-crews/naomi", cost: 1, tokens: 100, turns: 1 }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("thw-home: naomi")).toBeInTheDocument();
+    expect(screen.getByText("thw-home-openrouter: naomi")).toBeInTheDocument();
+  });
+
+  it("applies basename collision walk-up between two different real actor paths sharing a basename", () => {
+    render(
+      <BreakdownPanel
+        title="By actor"
+        groupBy="actor"
+        totalsCost={2}
+        breakdown={[
+          row({ key: "thw-home:/home/a/.typ-crews/naomi", cost: 1, tokens: 100, turns: 1 }),
+          row({ key: "thw-home:/home/b/other/.typ-crews/naomi", cost: 1, tokens: 100, turns: 1 }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("thw-home: a/.typ-crews/naomi")).toBeInTheDocument();
+    expect(screen.getByText("thw-home: other/.typ-crews/naomi")).toBeInTheDocument();
+  });
+
+  it("flags the (unknown) sentinel actor as an unknown row, not its hostname prefix", () => {
+    render(
+      <BreakdownPanel
+        title="By actor"
+        groupBy="actor"
+        totalsCost={1}
+        breakdown={[row({ key: "thw-home:(unknown)", cost: 1, tokens: 100, turns: 1 })]}
+      />,
+    );
+
+    const label = screen.getByText("thw-home: (unknown)");
+    expect(label.closest(".rank-row")).toHaveClass("unknown");
+  });
+});
+
 // story-2/ticket-7: group_by=path's key is now machine-prefixed
 // (`<hostname>:<path>` once the BFF substitutes it,
 // `<install_id>:<path>` raw) — internal/domain/usage/summary.go's
@@ -137,5 +225,71 @@ describe("BreakdownPanel — group_by=path", () => {
 
     const label = screen.getByText("thw-home: (unknown)");
     expect(label.closest(".rank-row")).toHaveClass("unknown");
+  });
+});
+
+// story-2/ticket-16: มายด์'s own observation — once a machine filter is
+// active, every row on screen is already scoped to that one machine, so
+// repeating its name as a prefix on every row is pure noise. Applies
+// identically to `path` and `actor`, both machine-prefixed keys.
+describe("BreakdownPanel — activeMachine suppresses the machine prefix", () => {
+  it("drops the machine prefix from By path when a machine filter is active", () => {
+    render(
+      <BreakdownPanel
+        title="By path"
+        groupBy="path"
+        totalsCost={1}
+        activeMachine="install-a"
+        breakdown={[row({ key: "thw-home:/home/thw-home/gits/my-task", raw_key: "install-a:/home/thw-home/gits/my-task", cost: 1, tokens: 100, turns: 1 })]}
+      />,
+    );
+
+    expect(screen.getByText("my-task")).toBeInTheDocument();
+    expect(screen.queryByText("thw-home: my-task")).not.toBeInTheDocument();
+    // The full raw key is still reachable via the tooltip even with the
+    // prefix hidden from the label.
+    expect(screen.getByText("my-task")).toHaveAttribute("title", "install-a:/home/thw-home/gits/my-task");
+  });
+
+  it("drops the machine prefix from By actor when a machine filter is active", () => {
+    render(
+      <BreakdownPanel
+        title="By actor"
+        groupBy="actor"
+        totalsCost={1}
+        activeMachine="install-a"
+        breakdown={[row({ key: "thw-home:/home/thw-home/.typ-crews/naomi", raw_key: "install-a:/home/thw-home/.typ-crews/naomi", cost: 1, tokens: 100, turns: 1 })]}
+      />,
+    );
+
+    expect(screen.getByText("naomi")).toBeInTheDocument();
+    expect(screen.queryByText("thw-home: naomi")).not.toBeInTheDocument();
+  });
+
+  it("still shows the machine prefix when no machine filter is active", () => {
+    render(
+      <BreakdownPanel
+        title="By path"
+        groupBy="path"
+        totalsCost={1}
+        breakdown={[row({ key: "thw-home:/home/thw-home/gits/my-task", cost: 1, tokens: 100, turns: 1 })]}
+      />,
+    );
+
+    expect(screen.getByText("thw-home: my-task")).toBeInTheDocument();
+  });
+
+  it("does not affect By machine's own label, which never carries a prefix to begin with", () => {
+    render(
+      <BreakdownPanel
+        title="By machine"
+        groupBy="machine"
+        totalsCost={1}
+        activeMachine="install-a"
+        breakdown={[row({ key: "thw-home", raw_key: "install-a", cost: 1, tokens: 100, turns: 1 })]}
+      />,
+    );
+
+    expect(screen.getByText("thw-home")).toBeInTheDocument();
   });
 });

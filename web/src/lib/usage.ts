@@ -27,25 +27,70 @@ export type UsageBreakdownRow = components["schemas"]["UsageBreakdownRow"];
 export type UsageSummary = components["schemas"]["UsageSummary"];
 export type UsageWindowRow = components["schemas"]["UsageWindowRow"];
 export type UsageWindows = components["schemas"]["UsageWindows"];
+export type UsageScanRoot = components["schemas"]["UsageScanRoot"];
+export type UsageScanRoots = components["schemas"]["UsageScanRootList"];
 
-export const usageSummaryQueryKey = (window: UsageWindow, groupBy: UsageGroupBy) =>
-  ["bff", "usage", "summary", window, groupBy] as const;
+// story-2/ticket-11: the two new optional console filters (contract's
+// "Console filters" section) — both AND-composed with `window` and with
+// each other, server-side (ticket 10). `scanRoot` is always the composite
+// `<install_id>:<scan_root_path>` string, never a bare path/name (same
+// machine-prefix convention as the cross-machine `path` fix, since
+// scan-root naming is per-install).
+export interface UsageFilterParams {
+  machine?: string;
+  scanRoot?: string;
+}
 
-export const usageWindowsQueryKey = ["bff", "usage", "windows"] as const;
+export const usageSummaryQueryKey = (window: UsageWindow, groupBy: UsageGroupBy, filters: UsageFilterParams = {}) =>
+  ["bff", "usage", "summary", window, groupBy, filters.machine ?? null, filters.scanRoot ?? null] as const;
 
-/** GET /api/bff/usage/summary?window=...&group_by=... */
-export function useUsageSummaryQuery(window: UsageWindow, groupBy: UsageGroupBy) {
+export const usageWindowsQueryKey = (filters: UsageFilterParams = {}) =>
+  ["bff", "usage", "windows", filters.machine ?? null, filters.scanRoot ?? null] as const;
+
+export const usageScanRootsQueryKey = ["bff", "usage", "scan-roots"] as const;
+
+// appendFilterParams mutates `search` in place, adding `machine`/
+// `scan_root` only when set — the shared bit between getUsageSummary and
+// getUsageWindows' own two new optional params (bff-openapi.yaml).
+function appendFilterParams(search: URLSearchParams, filters: UsageFilterParams) {
+  if (filters.machine !== undefined) search.set("machine", filters.machine);
+  if (filters.scanRoot !== undefined) search.set("scan_root", filters.scanRoot);
+}
+
+/** GET /api/bff/usage/summary?window=...&group_by=...&machine=...&scan_root=... */
+export function useUsageSummaryQuery(window: UsageWindow, groupBy: UsageGroupBy, filters: UsageFilterParams = {}) {
   return useQuery({
-    queryKey: usageSummaryQueryKey(window, groupBy),
-    queryFn: () =>
-      bffFetch<UsageSummary>(`/usage/summary?window=${window}&group_by=${groupBy}`),
+    queryKey: usageSummaryQueryKey(window, groupBy, filters),
+    queryFn: () => {
+      const search = new URLSearchParams({ window, group_by: groupBy });
+      appendFilterParams(search, filters);
+      return bffFetch<UsageSummary>(`/usage/summary?${search.toString()}`);
+    },
   });
 }
 
 /** GET /api/bff/usage/windows — the fixed 5h/24h/today/week/month/year/lifetime table. */
-export function useUsageWindowsQuery() {
+export function useUsageWindowsQuery(filters: UsageFilterParams = {}) {
   return useQuery({
-    queryKey: usageWindowsQueryKey,
-    queryFn: () => bffFetch<UsageWindows>("/usage/windows"),
+    queryKey: usageWindowsQueryKey(filters),
+    queryFn: () => {
+      const search = new URLSearchParams();
+      appendFilterParams(search, filters);
+      const query = search.toString();
+      return bffFetch<UsageWindows>(`/usage/windows${query ? `?${query}` : ""}`);
+    },
+  });
+}
+
+/**
+ * GET /api/bff/usage/scan-roots — story-2/ticket-9: every registered scan
+ * root across every reporting install, no params ever (populates the
+ * scan-root filter's own dropdown; unaffected by any filter so its option
+ * list never collapses once a filter is selected).
+ */
+export function useUsageScanRootsQuery() {
+  return useQuery({
+    queryKey: usageScanRootsQueryKey,
+    queryFn: () => bffFetch<UsageScanRoots>("/usage/scan-roots"),
   });
 }

@@ -10,6 +10,81 @@ import (
 	"time"
 )
 
+const listMachineSummaries = `-- name: ListMachineSummaries :many
+SELECT
+  m.install_id,
+  m.hostname,
+  m.last_seen_at,
+  COALESCE(SUM(u.cost), 0) AS lifetime_cost,
+  COALESCE(SUM(u.input_tokens + u.output_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens), 0) AS lifetime_tokens,
+  COUNT(DISTINCT u.path) AS collected_paths,
+  COUNT(DISTINCT u.actor) AS collected_actors
+FROM machines m
+LEFT JOIN usage_events u ON u.machine = m.install_id
+GROUP BY m.install_id, m.hostname, m.last_seen_at
+ORDER BY m.last_seen_at DESC
+`
+
+type ListMachineSummariesRow struct {
+	InstallID       string      `json:"install_id"`
+	Hostname        string      `json:"hostname"`
+	LastSeenAt      time.Time   `json:"last_seen_at"`
+	LifetimeCost    interface{} `json:"lifetime_cost"`
+	LifetimeTokens  interface{} `json:"lifetime_tokens"`
+	CollectedPaths  int64       `json:"collected_paths"`
+	CollectedActors int64       `json:"collected_actors"`
+}
+
+// story-3/ticket-1: every machines row's lifetime summary -- backs
+// GET /api/bff/machines (contract's Data model, copied verbatim from
+// there). Unlike ListMachines/ListScanRoots above (a bare label lookup,
+// joined against usage_events in Go), this query does its own
+// aggregation and hostname pairing entirely in SQL: there is no existing
+// pure Go aggregation function (summary.go's Aggregate) this could reuse
+// instead, since Aggregate is window-scoped and this is deliberately
+// lifetime-scoped with no window argument at all -- a single round trip
+// is simpler than fetching every usage_events row ever written just to
+// sum it in Go.
+//
+// LEFT JOIN + COALESCE are defensive, not load-bearing: a machines row is
+// only ever created alongside at least one usage_events row today (the
+// collector's own early-return on zero events, internal/collector/
+// collector.go), but this guarantees a machine with no matching
+// usage_events rows still comes back as one zeroed row rather than being
+// silently dropped or erroring, if that ever stops being true. Ordered
+// last_seen_at DESC -- "Last reported" descending, already the order the
+// console page needs, no client-side re-sort required.
+func (q *Queries) ListMachineSummaries(ctx context.Context) ([]ListMachineSummariesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listMachineSummaries)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListMachineSummariesRow
+	for rows.Next() {
+		var i ListMachineSummariesRow
+		if err := rows.Scan(
+			&i.InstallID,
+			&i.Hostname,
+			&i.LastSeenAt,
+			&i.LifetimeCost,
+			&i.LifetimeTokens,
+			&i.CollectedPaths,
+			&i.CollectedActors,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listMachines = `-- name: ListMachines :many
 SELECT install_id, hostname FROM machines
 `

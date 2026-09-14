@@ -72,7 +72,7 @@ func run(configPath string) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	hostname, err := os.Hostname()
+	hostname, err := collector.ResolveHostname(cfg, os.Hostname)
 	if err != nil {
 		hostname = "unknown-host"
 	}

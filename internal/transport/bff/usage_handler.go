@@ -67,6 +67,28 @@ func toWireBreakdown(rows []usage.BreakdownRow) []bffapi.UsageBreakdownRow {
 	return out
 }
 
+// usageFilterFromQuery builds a usage.Filter from the two optional
+// machine/scan_root query params shared by GetUsageSummary and
+// GetUsageWindows (story-2/ticket-10, contract's API surface section) —
+// both are plain optional strings on the wire (bff-openapi.yaml), absent
+// meaning "no constraint on that axis," which is exactly usage.Filter's
+// own empty-string zero-value meaning (usage.Filter's own doc comment).
+// Deliberately does no shape validation on scan_root here: the contract's
+// own tolerance ("an invalid scan_root value ... returns an empty/zero
+// result, not an error") means a malformed value must reach the service/
+// repo layer rather than being rejected at this handler, which is where
+// that tolerance is actually implemented (repo.go's splitScanRootFilter).
+func usageFilterFromQuery(machine, scanRoot *string) usage.Filter {
+	var f usage.Filter
+	if machine != nil {
+		f.Machine = *machine
+	}
+	if scanRoot != nil {
+		f.ScanRoot = *scanRoot
+	}
+	return f
+}
+
 // GetUsageSummary implements bffapi.ServerInterface —
 // GET /api/bff/usage/summary?window=...&group_by=.... window/group_by are
 // both required, enum-constrained query parameters (bff-openapi.yaml's
@@ -77,6 +99,10 @@ func toWireBreakdown(rows []usage.BreakdownRow) []bffapi.UsageBreakdownRow {
 // practice; it's still checked, not assumed, the same defensive-fallback
 // convention every other handler in this package follows for its own
 // request validator.
+//
+// machine/scan_root (story-2/ticket-10) are both optional — absent means
+// no filter on that axis (usageFilterFromQuery, above) — and AND-compose
+// with window/group_by and with each other when both are set.
 func (s *UsageServer) GetUsageSummary(c *gin.Context, params bffapi.GetUsageSummaryParams) {
 	if _, ok := bffOwnerID(c); !ok {
 		return
@@ -92,8 +118,9 @@ func (s *UsageServer) GetUsageSummary(c *gin.Context, params bffapi.GetUsageSumm
 		c.AbortWithStatusJSON(http.StatusBadRequest, bffValidationErrorBody("unrecognised group_by value", "group_by"))
 		return
 	}
+	filter := usageFilterFromQuery(params.Machine, params.ScanRoot)
 
-	result, err := s.Service.Summary(c.Request.Context(), window, groupBy, time.Now())
+	result, err := s.Service.Summary(c.Request.Context(), window, groupBy, filter, time.Now())
 	if err != nil {
 		c.AbortWithStatus(http.StatusInternalServerError)
 		return
@@ -110,12 +137,18 @@ func (s *UsageServer) GetUsageSummary(c *gin.Context, params bffapi.GetUsageSumm
 // GET /api/bff/usage/windows: the fixed 5h/24h/today/week/month/year/
 // lifetime table (story-1/ticket-20 grew this from five to seven rows),
 // no group_by (usage.Service.Windows' own doc comment).
-func (s *UsageServer) GetUsageWindows(c *gin.Context) {
+//
+// machine/scan_root (story-2/ticket-10) are the same two optional
+// filters GetUsageSummary takes — added so this fixed table also
+// respects an active console filter (contract's API surface section:
+// "story-1 shipped this endpoint with zero params").
+func (s *UsageServer) GetUsageWindows(c *gin.Context, params bffapi.GetUsageWindowsParams) {
 	if _, ok := bffOwnerID(c); !ok {
 		return
 	}
+	filter := usageFilterFromQuery(params.Machine, params.ScanRoot)
 
-	rows, err := s.Service.Windows(c.Request.Context(), time.Now())
+	rows, err := s.Service.Windows(c.Request.Context(), filter, time.Now())
 	if err != nil {
 		c.AbortWithStatus(http.StatusInternalServerError)
 		return
@@ -131,4 +164,70 @@ func (s *UsageServer) GetUsageWindows(c *gin.Context) {
 		})
 	}
 	c.JSON(http.StatusOK, bffapi.UsageWindows{Windows: wire})
+}
+
+// GetUsageScanRoots implements bffapi.ServerInterface —
+// GET /api/bff/usage/scan-roots (story-2/ticket-9): every registered
+// scan_roots row across every reporting install, joined with its
+// machine's hostname (usage.Service.ScanRoots does the join, in Go, over
+// two separate repo reads — no params, no window/group_by, this endpoint
+// exists purely to populate the console's future scan-root filter
+// dropdown, ticket 11). story-3/ticket-2 adds source_type to the wire
+// mapping below — additive, the filter dropdown (its only consumer
+// before this ticket) doesn't display it and needs no change.
+func (s *UsageServer) GetUsageScanRoots(c *gin.Context) {
+	if _, ok := bffOwnerID(c); !ok {
+		return
+	}
+
+	rows, err := s.Service.ScanRoots(c.Request.Context())
+	if err != nil {
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
+
+	wire := make([]bffapi.UsageScanRoot, 0, len(rows))
+	for _, r := range rows {
+		wire = append(wire, bffapi.UsageScanRoot{
+			InstallId:    r.InstallID,
+			Hostname:     r.Hostname,
+			ScanRootPath: r.ScanRootPath,
+			Name:         r.Name,
+			SourceType:   r.SourceType,
+		})
+	}
+	c.JSON(http.StatusOK, bffapi.UsageScanRootList{ScanRoots: wire})
+}
+
+// GetMachines implements bffapi.ServerInterface — GET /api/bff/machines
+// (story-3/ticket-1): every machine's lifetime summary, pre-sorted
+// last_seen_at descending by usage.Service.MachineSummaries' own query
+// (db/queries/machines.sql), no re-sort needed here. No parameters, no
+// window/group_by — deliberately lifetime-scoped, unlike GetUsageSummary
+// above (goal's point 3: this page is a fleet inventory, not a trend
+// view).
+func (s *UsageServer) GetMachines(c *gin.Context) {
+	if _, ok := bffOwnerID(c); !ok {
+		return
+	}
+
+	rows, err := s.Service.MachineSummaries(c.Request.Context())
+	if err != nil {
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
+
+	wire := make([]bffapi.Machine, 0, len(rows))
+	for _, r := range rows {
+		wire = append(wire, bffapi.Machine{
+			InstallId:       r.InstallID,
+			Hostname:        r.Hostname,
+			LastSeenAt:      r.LastSeenAt,
+			LifetimeCost:    r.LifetimeCost,
+			LifetimeTokens:  r.LifetimeTokens,
+			CollectedPaths:  r.CollectedPaths,
+			CollectedActors: r.CollectedActors,
+		})
+	}
+	c.JSON(http.StatusOK, bffapi.MachineList{Machines: wire})
 }

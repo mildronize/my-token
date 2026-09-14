@@ -42,6 +42,25 @@ func seedUsageEvent(t *testing.T, conn *sql.DB, id, actor, path, machine string,
 	require.NoError(t, err)
 }
 
+// seedUsageEventWithScanRoot mirrors seedUsageEvent above, plus a
+// scan_root column value — story-2/ticket-10's own filter tests need
+// distinct scan_root values per row, which seedUsageEvent's own fixed
+// insert (scan_root always defaulted) can't express. Kept as a separate
+// helper rather than widening seedUsageEvent's own signature, so every
+// existing call site of that helper stays unchanged.
+func seedUsageEventWithScanRoot(t *testing.T, conn *sql.DB, id, actor, path, machine, scanRoot string, tokens int64, cost float64, createdAt time.Time) {
+	t.Helper()
+	if id == "" {
+		id = "msg-" + t.Name() + "-" + createdAt.Format(time.RFC3339Nano)
+	}
+	_, err := conn.Exec(
+		`INSERT INTO usage_events (id, session_id, actor, path, machine, model, scan_root, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, cost, source, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, 'claude_code', ?)`,
+		id, "session-"+id, actor, path, machine, "claude-sonnet-4-5-20250929", scanRoot, tokens, cost, createdAt,
+	)
+	require.NoError(t, err)
+}
+
 // newBFFRouterForUsage builds one /api/bff router with a real
 // usage.Service/usage.Repo on top of a fresh test DB, plus a signed
 // session cookie for a freshly seeded owner — the usage-domain analogue
@@ -96,9 +115,37 @@ func decodeUsageWindows(t *testing.T, rec *httptest.ResponseRecorder) bffapi.Usa
 	return got
 }
 
+func decodeUsageScanRootList(t *testing.T, rec *httptest.ResponseRecorder) bffapi.UsageScanRootList {
+	t.Helper()
+	var got bffapi.UsageScanRootList
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	return got
+}
+
+// seedScanRoot inserts one scan_roots row directly (bypassing
+// usage.Repo/usage.Service's own UpsertScanRoot path) — mirrors
+// seedMachine's own reasoning (above): these tests shouldn't need to
+// trust a second package's write path just to set up a fixture.
+//
+// story-3/ticket-2: sourceType is now an explicit parameter (was
+// hardcoded 'claude_code') so callers can assert GetUsageScanRoots'
+// wire response carries source_type through correctly, including a
+// non-default value.
+func seedScanRoot(t *testing.T, conn *sql.DB, installID, scanRootPath, name, sourceType string, lastSeenAt time.Time) {
+	t.Helper()
+	_, err := conn.Exec(
+		`INSERT INTO scan_roots (install_id, scan_root_path, name, source_type, last_seen_at) VALUES (?, ?, ?, ?, ?)`,
+		installID, scanRootPath, name, sourceType, lastSeenAt,
+	)
+	require.NoError(t, err)
+}
+
 // TestGetUsageSummary_GroupsAndTotalsMatchSeededRows is this endpoint's
 // own core acceptance test: three events across two actors, all inside
-// the requested window, group_by=actor.
+// the requested window, group_by=actor. story-2/ticket-16 makes
+// group_by=actor's key machine-prefixed too (`<hostname>:<actor>` once
+// substituted, `<install_id>:<actor>` raw) — no `machines` row is seeded
+// here, so both rows keep their raw install_id prefix.
 func TestGetUsageSummary_GroupsAndTotalsMatchSeededRows(t *testing.T) {
 	router, session, conn := newBFFRouterForUsage(t)
 	now := time.Now().UTC()
@@ -117,11 +164,11 @@ func TestGetUsageSummary_GroupsAndTotalsMatchSeededRows(t *testing.T) {
 	assert.Equal(t, int64(2), got.ReportingInstalls, "two distinct machines reported in this window")
 
 	require.Len(t, got.Breakdown, 2)
-	assert.Equal(t, "freya", got.Breakdown[0].Key, "freya has the higher cost (3.0), sorted first")
+	assert.Equal(t, "install-a:freya", got.Breakdown[0].Key, "freya has the higher cost (3.0), sorted first")
 	assert.InDelta(t, 3.0, got.Breakdown[0].Cost, 1e-9)
 	assert.Equal(t, int64(300), got.Breakdown[0].Tokens)
 	assert.Equal(t, int64(2), got.Breakdown[0].Turns)
-	assert.Equal(t, "nicole", got.Breakdown[1].Key)
+	assert.Equal(t, "install-b:nicole", got.Breakdown[1].Key)
 	assert.InDelta(t, 0.5, got.Breakdown[1].Cost, 1e-9)
 }
 
@@ -172,6 +219,32 @@ func TestGetUsageSummary_GroupByPath_CrossMachineIdenticalPath_DoesNotMerge(t *t
 	require.Len(t, got.Breakdown, 2, "the same literal path from two different machines must not merge into one row")
 	assert.Equal(t, "thw-laptop:/gits/my-task", got.Breakdown[0].Key, "higher cost first")
 	assert.Equal(t, "thw-home:/gits/my-task", got.Breakdown[1].Key)
+}
+
+// TestGetUsageSummary_GroupByActor_CrossMachineIdenticalActor_DoesNotMerge
+// is story-2/ticket-16's own HTTP-level regression test, mirroring
+// TestGetUsageSummary_GroupByPath_CrossMachineIdenticalPath_DoesNotMerge
+// exactly: the exact same literal actor path reported by two different
+// machines must produce two distinct group_by=actor rows, not one
+// silently merged row (มายด์'s own real-world finding: two collector
+// installs sharing one filesystem can genuinely report an identical raw
+// actor string).
+func TestGetUsageSummary_GroupByActor_CrossMachineIdenticalActor_DoesNotMerge(t *testing.T) {
+	router, session, conn := newBFFRouterForUsage(t)
+	now := time.Now().UTC()
+
+	seedMachine(t, conn, "install-a", "thw-home", now)
+	seedMachine(t, conn, "install-b", "thw-home-openrouter", now)
+	seedUsageEvent(t, conn, "e1", "/home/thw-home/.typ-crews/naomi", "/gits/p1", "install-a", 100, 1.0, now.Add(-1*time.Hour))
+	seedUsageEvent(t, conn, "e2", "/home/thw-home/.typ-crews/naomi", "/gits/p2", "install-b", 100, 3.0, now.Add(-1*time.Hour))
+
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/usage/summary?window=24h&group_by=actor", session, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	got := decodeUsageSummary(t, rec)
+	require.Len(t, got.Breakdown, 2, "the same literal actor path from two different machines must not merge into one row")
+	assert.Equal(t, "thw-home-openrouter:/home/thw-home/.typ-crews/naomi", got.Breakdown[0].Key, "higher cost first")
+	assert.Equal(t, "thw-home:/home/thw-home/.typ-crews/naomi", got.Breakdown[1].Key)
 }
 
 // TestGetUsageSummary_GroupByMachine_ReturnsHostnamesNotUUIDs is this
@@ -317,6 +390,243 @@ func TestGetUsageSummary_MissingRequiredParams_Rejected(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
+// --- GET /api/bff/usage/summary & /usage/windows: machine/scan_root
+// filters (story-2/ticket-10, contract's API surface section) ----------
+// These seed usage_events across (at least) two machines and two
+// scan-roots and exercise both endpoints end to end through the real
+// HTTP route/middleware chain/SQLite-backed repo — the pure filter/AND
+// composition logic itself is already covered at the repo layer
+// (internal/domain/usage/repo_test.go's TestRepo_ListEventsInWindow_*
+// tests) and the service-wiring layer (service_test.go's
+// TestService_Summary_PassesFilterToRepoUnmodified and friends); these
+// prove the whole stack (query-param parsing through to the JSON
+// response) wires the same behavior together correctly.
+
+// TestGetUsageSummary_MachineFilter_NarrowsWholeResult is this ticket's
+// own core acceptance test: machine=<install_id> alone scopes
+// totals/breakdown/reporting_installs to just that machine's events, not
+// just one panel's own dimension (contract's Console filters section:
+// global, not per-panel).
+func TestGetUsageSummary_MachineFilter_NarrowsWholeResult(t *testing.T) {
+	router, session, conn := newBFFRouterForUsage(t)
+	now := time.Now().UTC()
+
+	seedUsageEvent(t, conn, "e-a", "freya", "/gits/my-task", "install-a", 100, 1.0, now.Add(-1*time.Hour))
+	seedUsageEvent(t, conn, "e-b", "nicole", "/gits/my-task", "install-b", 200, 5.0, now.Add(-1*time.Hour))
+
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/usage/summary?window=24h&group_by=actor&machine=install-a", session, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	got := decodeUsageSummary(t, rec)
+	assert.Equal(t, int64(1), got.Totals.Turns, "totals must be scoped to the filtered machine")
+	assert.Equal(t, int64(100), got.Totals.Tokens)
+	require.Len(t, got.Breakdown, 1)
+	assert.Equal(t, "install-a:freya", got.Breakdown[0].Key)
+	assert.Equal(t, int64(1), got.ReportingInstalls, "reporting_installs must also be scoped, not lifetime/unfiltered")
+}
+
+// TestGetUsageSummary_ScanRootFilter_NarrowsWholeResult proves
+// scan_root=<install_id>:<scan_root_path> alone narrows correctly — same
+// literal scan-root path on a different machine must not match (the
+// machine-prefixed composite, same convention as group_by=path's own
+// cross-machine fix).
+func TestGetUsageSummary_ScanRootFilter_NarrowsWholeResult(t *testing.T) {
+	router, session, conn := newBFFRouterForUsage(t)
+	now := time.Now().UTC()
+
+	seedUsageEventWithScanRoot(t, conn, "e-a", "freya", "/gits/my-task", "install-a", "/home/thw-home/.claude", 100, 1.0, now.Add(-1*time.Hour))
+	seedUsageEventWithScanRoot(t, conn, "e-a2", "freya", "/gits/other", "install-a", "/home/thw-home/.claude-local", 300, 9.0, now.Add(-1*time.Hour))
+	seedUsageEventWithScanRoot(t, conn, "e-b", "nicole", "/gits/my-task", "install-b", "/home/thw-home/.claude", 200, 5.0, now.Add(-1*time.Hour))
+
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/usage/summary?window=24h&group_by=actor&scan_root=install-a:/home/thw-home/.claude", session, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	got := decodeUsageSummary(t, rec)
+	assert.Equal(t, int64(1), got.Totals.Turns)
+	assert.Equal(t, int64(100), got.Totals.Tokens)
+	require.Len(t, got.Breakdown, 1)
+	assert.Equal(t, "install-a:freya", got.Breakdown[0].Key)
+}
+
+// TestGetUsageSummary_BothFiltersSet_ANDComposeToIntersection is the
+// contract's own explicitly-named requirement: machine and scan_root set
+// together narrow to their intersection (AND), not their union (OR).
+func TestGetUsageSummary_BothFiltersSet_ANDComposeToIntersection(t *testing.T) {
+	router, session, conn := newBFFRouterForUsage(t)
+	now := time.Now().UTC()
+
+	// Matches both filters.
+	seedUsageEventWithScanRoot(t, conn, "both-match", "freya", "/gits/my-task", "install-a", "/home/thw-home/.claude", 100, 1.0, now.Add(-1*time.Hour))
+	// Matches machine alone (different scan_root) -- an OR implementation
+	// would wrongly include this.
+	seedUsageEventWithScanRoot(t, conn, "machine-only", "freya", "/gits/other", "install-a", "/home/thw-home/.claude-local", 300, 9.0, now.Add(-1*time.Hour))
+	// Matches scan_root's own path alone (different machine).
+	seedUsageEventWithScanRoot(t, conn, "path-only", "nicole", "/gits/my-task", "install-b", "/home/thw-home/.claude", 200, 5.0, now.Add(-1*time.Hour))
+
+	rec := doBFFJSONRequest(t, router, http.MethodGet,
+		"/api/bff/usage/summary?window=24h&group_by=actor&machine=install-a&scan_root=install-a:/home/thw-home/.claude", session, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	got := decodeUsageSummary(t, rec)
+	assert.Equal(t, int64(1), got.Totals.Turns, "only the row matching BOTH filters should count")
+	assert.Equal(t, int64(100), got.Totals.Tokens)
+	require.Len(t, got.Breakdown, 1)
+	assert.Equal(t, "install-a:freya", got.Breakdown[0].Key)
+}
+
+// TestGetUsageSummary_InvalidScanRoot_MalformedShape_EmptyResultNotError
+// covers the contract's own explicitly-named tolerance ("mirrors this
+// API's existing tolerance for 'no matching data' versus 'malformed
+// request'"): a scan_root value with no ":" at all yields 200 with an
+// empty/zero result, not a 400.
+func TestGetUsageSummary_InvalidScanRoot_MalformedShape_EmptyResultNotError(t *testing.T) {
+	router, session, conn := newBFFRouterForUsage(t)
+	now := time.Now().UTC()
+	seedUsageEvent(t, conn, "e1", "freya", "/gits/my-task", "install-a", 100, 1.0, now.Add(-1*time.Hour))
+
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/usage/summary?window=24h&group_by=actor&scan_root=no-colon-here", session, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String(), "a malformed scan_root shape must not 400")
+
+	got := decodeUsageSummary(t, rec)
+	assert.Equal(t, int64(0), got.Totals.Turns)
+	assert.Empty(t, got.Breakdown)
+	assert.Equal(t, int64(0), got.ReportingInstalls)
+}
+
+// TestGetUsageSummary_ScanRootFilter_WellFormedButNonexistentPair_EmptyResult
+// covers the contract's other named tolerance: a well-formed
+// install_id:scan_root_path pair that simply doesn't exist yields the
+// same empty/zero result, not an error.
+func TestGetUsageSummary_ScanRootFilter_WellFormedButNonexistentPair_EmptyResult(t *testing.T) {
+	router, session, conn := newBFFRouterForUsage(t)
+	now := time.Now().UTC()
+	seedUsageEventWithScanRoot(t, conn, "e1", "freya", "/gits/my-task", "install-a", "/home/thw-home/.claude", 100, 1.0, now.Add(-1*time.Hour))
+
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/usage/summary?window=24h&group_by=actor&scan_root=install-nonexistent:/nowhere", session, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	got := decodeUsageSummary(t, rec)
+	assert.Equal(t, int64(0), got.Totals.Turns)
+	assert.Empty(t, got.Breakdown)
+}
+
+// --- GET /api/bff/usage/windows: same two filters (story-2/ticket-10) --
+
+// TestGetUsageWindows_MachineFilter_NarrowsEveryRow proves the fixed
+// table also respects an active machine filter, on every one of its
+// rows, not just one window (contract's API surface section: "story-1
+// shipped this endpoint with zero params").
+func TestGetUsageWindows_MachineFilter_NarrowsEveryRow(t *testing.T) {
+	router, session, conn := newBFFRouterForUsage(t)
+	now := time.Now().UTC()
+
+	seedUsageEvent(t, conn, "e-a", "freya", "/gits/my-task", "install-a", 100, 1.0, now.Add(-1*time.Hour))
+	seedUsageEvent(t, conn, "e-b", "nicole", "/gits/my-task", "install-b", 200, 5.0, now.Add(-1*time.Hour))
+
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/usage/windows?machine=install-a", session, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	got := decodeUsageWindows(t, rec)
+	require.Len(t, got.Windows, 7)
+	// Both seeded events are 1 hour ago, so every one of the 7 fixed
+	// windows would otherwise show 2 turns -- the filter must bring every
+	// single row down to install-a's own 1, proving it scopes the whole
+	// table, not just one row.
+	for _, w := range got.Windows {
+		assert.Equal(t, int64(1), w.Turns, "window %s must only count install-a's own event", w.Window)
+		assert.Equal(t, int64(100), w.Tokens, "window %s", w.Window)
+	}
+}
+
+// TestGetUsageWindows_ScanRootFilter_NarrowsEveryRow mirrors
+// TestGetUsageSummary_ScanRootFilter_NarrowsWholeResult for the
+// fixed-table endpoint: scan_root=<install_id>:<scan_root_path> alone
+// must narrow every one of the seven rows, not just one, and the same
+// literal scan-root path on a different machine must not match.
+func TestGetUsageWindows_ScanRootFilter_NarrowsEveryRow(t *testing.T) {
+	router, session, conn := newBFFRouterForUsage(t)
+	now := time.Now().UTC()
+
+	seedUsageEventWithScanRoot(t, conn, "e-a", "freya", "/gits/my-task", "install-a", "/home/thw-home/.claude", 100, 1.0, now.Add(-1*time.Hour))
+	seedUsageEventWithScanRoot(t, conn, "e-a2", "freya", "/gits/other", "install-a", "/home/thw-home/.claude-local", 300, 9.0, now.Add(-1*time.Hour))
+	seedUsageEventWithScanRoot(t, conn, "e-b", "nicole", "/gits/my-task", "install-b", "/home/thw-home/.claude", 200, 5.0, now.Add(-1*time.Hour))
+
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/usage/windows?scan_root=install-a:/home/thw-home/.claude", session, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	got := decodeUsageWindows(t, rec)
+	require.Len(t, got.Windows, 7)
+	for _, w := range got.Windows {
+		assert.Equal(t, int64(1), w.Turns, "window %s must only count the matching scan_root's own event", w.Window)
+		assert.Equal(t, int64(100), w.Tokens, "window %s", w.Window)
+	}
+}
+
+// TestGetUsageWindows_BothFiltersSet_ANDComposeToIntersection mirrors
+// TestGetUsageSummary_BothFiltersSet_ANDComposeToIntersection for the
+// fixed-table endpoint.
+func TestGetUsageWindows_BothFiltersSet_ANDComposeToIntersection(t *testing.T) {
+	router, session, conn := newBFFRouterForUsage(t)
+	now := time.Now().UTC()
+
+	seedUsageEventWithScanRoot(t, conn, "both-match", "freya", "/gits/my-task", "install-a", "/home/thw-home/.claude", 100, 1.0, now.Add(-1*time.Hour))
+	seedUsageEventWithScanRoot(t, conn, "machine-only", "freya", "/gits/other", "install-a", "/home/thw-home/.claude-local", 300, 9.0, now.Add(-1*time.Hour))
+	seedUsageEventWithScanRoot(t, conn, "path-only", "nicole", "/gits/my-task", "install-b", "/home/thw-home/.claude", 200, 5.0, now.Add(-1*time.Hour))
+
+	rec := doBFFJSONRequest(t, router, http.MethodGet,
+		"/api/bff/usage/windows?machine=install-a&scan_root=install-a:/home/thw-home/.claude", session, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	got := decodeUsageWindows(t, rec)
+	byWindow := map[string]bffapi.UsageWindowRow{}
+	for _, w := range got.Windows {
+		byWindow[string(w.Window)] = w
+	}
+	assert.Equal(t, int64(1), byWindow["24h"].Turns, "only the row matching BOTH filters should count")
+	assert.Equal(t, int64(100), byWindow["24h"].Tokens)
+}
+
+// TestGetUsageWindows_InvalidScanRoot_MalformedShape_EmptyResultNotError
+// mirrors TestGetUsageSummary_InvalidScanRoot_MalformedShape_EmptyResultNotError
+// for the fixed-table endpoint: a scan_root value with no ":" at all
+// yields 200 with every row zeroed, not a 400.
+func TestGetUsageWindows_InvalidScanRoot_MalformedShape_EmptyResultNotError(t *testing.T) {
+	router, session, conn := newBFFRouterForUsage(t)
+	now := time.Now().UTC()
+	seedUsageEvent(t, conn, "e1", "freya", "/gits/my-task", "install-a", 100, 1.0, now.Add(-1*time.Hour))
+
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/usage/windows?scan_root=no-colon-here", session, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String(), "a malformed scan_root shape must not 400")
+
+	got := decodeUsageWindows(t, rec)
+	require.Len(t, got.Windows, 7)
+	for _, w := range got.Windows {
+		assert.Equal(t, int64(0), w.Turns, "window %s must be zeroed, not errored", w.Window)
+		assert.Equal(t, int64(0), w.Tokens, "window %s", w.Window)
+	}
+}
+
+// TestGetUsageWindows_ScanRootFilter_WellFormedButNonexistentPair_EmptyResult
+// mirrors TestGetUsageSummary_ScanRootFilter_WellFormedButNonexistentPair_EmptyResult
+// for the fixed-table endpoint: a well-formed install_id:scan_root_path
+// pair that simply doesn't exist yields the same empty/zero result, not
+// an error.
+func TestGetUsageWindows_ScanRootFilter_WellFormedButNonexistentPair_EmptyResult(t *testing.T) {
+	router, session, conn := newBFFRouterForUsage(t)
+	now := time.Now().UTC()
+	seedUsageEventWithScanRoot(t, conn, "e1", "freya", "/gits/my-task", "install-a", "/home/thw-home/.claude", 100, 1.0, now.Add(-1*time.Hour))
+
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/usage/windows?scan_root=install-nonexistent:/nowhere", session, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	got := decodeUsageWindows(t, rec)
+	require.Len(t, got.Windows, 7)
+	for _, w := range got.Windows {
+		assert.Equal(t, int64(0), w.Turns, "window %s must be zeroed, not errored", w.Window)
+		assert.Equal(t, int64(0), w.Tokens, "window %s", w.Window)
+	}
+}
+
 // --- GET /api/bff/usage/windows -----------------------------------------
 
 // TestGetUsageWindows_EachRowReflectsItsOwnRange is the fixed-table
@@ -373,6 +683,175 @@ func TestGetUsageWindows_ReturnsSevenRowsInOrder(t *testing.T) {
 func TestGetUsageWindows_MissingSession_Unauthorized(t *testing.T) {
 	router, _, _ := newBFFRouterForUsage(t)
 	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/usage/windows", "", nil)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+// --- GET /api/bff/usage/scan-roots (story-2/ticket-9) -------------------
+
+// TestGetUsageScanRoots_ReturnsEveryRootAcrossTwoInstalls is this
+// ticket's own core acceptance test: machines + scan_roots rows seeded
+// across two install_ids, every row comes back with correct hostname
+// joins.
+//
+// story-3/ticket-2: also asserts source_type comes back verbatim — two
+// distinct values seeded (not both "claude_code") so the assertion can't
+// pass by coincidence if source_type were left unmapped/zeroed.
+func TestGetUsageScanRoots_ReturnsEveryRootAcrossTwoInstalls(t *testing.T) {
+	router, session, conn := newBFFRouterForUsage(t)
+	now := time.Now().UTC()
+
+	seedMachine(t, conn, "install-a", "thw-home", now)
+	seedMachine(t, conn, "install-b", "thw-laptop", now)
+	seedScanRoot(t, conn, "install-a", "/home/thw-home/.claude", "main", "claude_code", now)
+	seedScanRoot(t, conn, "install-a", "/home/thw-home/.claude-local", "backup-install", "codex", now)
+	seedScanRoot(t, conn, "install-b", "/home/laptop/.claude", "main", "claude_code", now)
+
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/usage/scan-roots", session, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	got := decodeUsageScanRootList(t, rec)
+	assert.ElementsMatch(t, []bffapi.UsageScanRoot{
+		{InstallId: "install-a", Hostname: "thw-home", ScanRootPath: "/home/thw-home/.claude", Name: "main", SourceType: "claude_code"},
+		{InstallId: "install-a", Hostname: "thw-home", ScanRootPath: "/home/thw-home/.claude-local", Name: "backup-install", SourceType: "codex"},
+		{InstallId: "install-b", Hostname: "thw-laptop", ScanRootPath: "/home/laptop/.claude", Name: "main", SourceType: "claude_code"},
+	}, got.ScanRoots)
+}
+
+// TestGetUsageScanRoots_NoMachinesRow_FallsBackToInstallID covers the
+// ticket's own explicitly-named edge case: a scan_roots row whose
+// install_id has no machines row falls back to showing the raw
+// install_id as the hostname, never a blank one.
+func TestGetUsageScanRoots_NoMachinesRow_FallsBackToInstallID(t *testing.T) {
+	router, session, conn := newBFFRouterForUsage(t)
+	now := time.Now().UTC()
+
+	// Deliberately no seedMachine call for "install-orphan".
+	seedScanRoot(t, conn, "install-orphan", "/home/thw-home/.claude", "main", "claude_code", now)
+
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/usage/scan-roots", session, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	got := decodeUsageScanRootList(t, rec)
+	require.Len(t, got.ScanRoots, 1)
+	assert.Equal(t, "install-orphan", got.ScanRoots[0].Hostname, "must fall back to the raw install_id, never a blank hostname")
+	assert.Equal(t, "install-orphan", got.ScanRoots[0].InstallId)
+	assert.Equal(t, "claude_code", got.ScanRoots[0].SourceType)
+}
+
+// TestGetUsageScanRoots_NoScanRoots_EmptyArray proves the zero-registered
+// case returns an empty array on the wire, not null or an error.
+func TestGetUsageScanRoots_NoScanRoots_EmptyArray(t *testing.T) {
+	router, session, _ := newBFFRouterForUsage(t)
+
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/usage/scan-roots", session, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	got := decodeUsageScanRootList(t, rec)
+	assert.Empty(t, got.ScanRoots)
+}
+
+func TestGetUsageScanRoots_MissingSession_Unauthorized(t *testing.T) {
+	router, _, _ := newBFFRouterForUsage(t)
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/usage/scan-roots", "", nil)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+func decodeMachineList(t *testing.T, rec *httptest.ResponseRecorder) bffapi.MachineList {
+	t.Helper()
+	var got bffapi.MachineList
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	return got
+}
+
+// --- GET /api/bff/machines (story-3/ticket-1) ---------------------------
+
+// TestGetMachines_ReturnsLifetimeSummaryAcrossMachines_SortedByLastReportedDesc
+// is this ticket's own core acceptance test (contract's Verifiable
+// section): two machines, seeded usage_events across distinct
+// paths/actors/costs, come back with the correct wire shape -- per-machine
+// lifetime_cost/lifetime_tokens/collected_paths/collected_actors -- sorted
+// last_seen_at descending, matching last_seen_at's own "Last reported"
+// semantics (not usage_events' own created_at).
+func TestGetMachines_ReturnsLifetimeSummaryAcrossMachines_SortedByLastReportedDesc(t *testing.T) {
+	router, session, conn := newBFFRouterForUsage(t)
+
+	earlierSeen := time.Date(2026, 9, 12, 8, 0, 0, 0, time.UTC)
+	laterSeen := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+
+	// install-a last reported most recently but is seeded first --
+	// proves ordering comes from last_seen_at, not seed/table order.
+	seedMachine(t, conn, "install-a", "thw-home", laterSeen)
+	seedMachine(t, conn, "install-b", "thw-laptop", earlierSeen)
+
+	// install-a: two events, two distinct paths, two distinct actors.
+	seedUsageEvent(t, conn, "event-a1", "freya", "repo-a", "install-a", 100, 1.0, laterSeen.Add(-time.Hour))
+	seedUsageEvent(t, conn, "event-a2", "nicole", "repo-b", "install-a", 200, 2.5, laterSeen.Add(-30*time.Minute))
+	// install-b: one event, one path, one actor.
+	seedUsageEvent(t, conn, "event-b1", "freya", "repo-c", "install-b", 50, 0.5, earlierSeen.Add(-time.Hour))
+
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/machines", session, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	got := decodeMachineList(t, rec)
+	require.Len(t, got.Machines, 2)
+
+	// last_seen_at DESC: install-a (later) must come first.
+	first := got.Machines[0]
+	assert.Equal(t, "install-a", first.InstallId)
+	assert.Equal(t, "thw-home", first.Hostname)
+	assert.True(t, first.LastSeenAt.Equal(laterSeen))
+	assert.InDelta(t, 3.5, first.LifetimeCost, 0.0001)
+	assert.Equal(t, int64(300), first.LifetimeTokens, "100+200 input tokens, no other token columns seeded")
+	assert.Equal(t, int64(2), first.CollectedPaths)
+	assert.Equal(t, int64(2), first.CollectedActors)
+
+	second := got.Machines[1]
+	assert.Equal(t, "install-b", second.InstallId)
+	assert.Equal(t, "thw-laptop", second.Hostname)
+	assert.True(t, second.LastSeenAt.Equal(earlierSeen))
+	assert.InDelta(t, 0.5, second.LifetimeCost, 0.0001)
+	assert.Equal(t, int64(50), second.LifetimeTokens)
+	assert.Equal(t, int64(1), second.CollectedPaths)
+	assert.Equal(t, int64(1), second.CollectedActors)
+}
+
+// TestGetMachines_MachineWithNoUsageEvents_ZeroedFieldsNotOmitted covers
+// the contract's own explicitly-named defensive edge case end to end
+// through the real HTTP route: a machines row with no matching
+// usage_events rows still comes back as one row with every numeric field
+// zeroed, not omitted from the array or erroring.
+func TestGetMachines_MachineWithNoUsageEvents_ZeroedFieldsNotOmitted(t *testing.T) {
+	router, session, conn := newBFFRouterForUsage(t)
+	seenAt := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+	seedMachine(t, conn, "install-orphan", "thw-orphan", seenAt)
+
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/machines", session, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	got := decodeMachineList(t, rec)
+	require.Len(t, got.Machines, 1)
+	assert.Equal(t, "install-orphan", got.Machines[0].InstallId)
+	assert.Equal(t, float64(0), got.Machines[0].LifetimeCost)
+	assert.Equal(t, int64(0), got.Machines[0].LifetimeTokens)
+	assert.Equal(t, int64(0), got.Machines[0].CollectedPaths)
+	assert.Equal(t, int64(0), got.Machines[0].CollectedActors)
+}
+
+// TestGetMachines_NoMachines_EmptyArray proves the zero-machines case
+// returns an empty array on the wire, not null or an error.
+func TestGetMachines_NoMachines_EmptyArray(t *testing.T) {
+	router, session, _ := newBFFRouterForUsage(t)
+
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/machines", session, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	got := decodeMachineList(t, rec)
+	assert.Empty(t, got.Machines)
+}
+
+func TestGetMachines_MissingSession_Unauthorized(t *testing.T) {
+	router, _, _ := newBFFRouterForUsage(t)
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/machines", "", nil)
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 }
 

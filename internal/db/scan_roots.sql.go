@@ -10,6 +10,60 @@ import (
 	"time"
 )
 
+const listScanRoots = `-- name: ListScanRoots :many
+SELECT install_id, scan_root_path, name, source_type FROM scan_roots
+`
+
+type ListScanRootsRow struct {
+	InstallID    string `json:"install_id"`
+	ScanRootPath string `json:"scan_root_path"`
+	Name         string `json:"name"`
+	SourceType   string `json:"source_type"`
+}
+
+// story-2/ticket-9: every registered scan_roots row across every
+// reporting install -- GET /api/bff/usage/scan-roots' own read path
+// (internal/domain/usage/service.go's Service.ScanRoots), populating the
+// console's future scan-root filter dropdown (ticket 11). No window
+// filter, no group_by -- this table is not usage_events, it's a small
+// upserted label table (mirrors ListMachines in machines.sql). The
+// install_id -> hostname join happens in Go over this result
+// (Service.ScanRoots, reusing the existing MachineHostnames query), not
+// as a SQL JOIN here -- same reasoning ListMachines' own doc comment
+// gives: reuse the pure aggregation/substitution logic that already
+// exists rather than re-deriving a join in SQL.
+//
+// story-3/ticket-2: also selects source_type -- already a real column
+// (story-2/ticket-8), just never selected here since ticket-9 only
+// needed this query for the filter dropdown, which doesn't display it.
+func (q *Queries) ListScanRoots(ctx context.Context) ([]ListScanRootsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listScanRoots)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListScanRootsRow
+	for rows.Next() {
+		var i ListScanRootsRow
+		if err := rows.Scan(
+			&i.InstallID,
+			&i.ScanRootPath,
+			&i.Name,
+			&i.SourceType,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const upsertScanRoot = `-- name: UpsertScanRoot :exec
 INSERT OR REPLACE INTO scan_roots (install_id, scan_root_path, name, source_type, last_seen_at)
 VALUES (?, ?, ?, ?, ?)
