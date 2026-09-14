@@ -126,11 +126,16 @@ func decodeUsageScanRootList(t *testing.T, rec *httptest.ResponseRecorder) bffap
 // usage.Repo/usage.Service's own UpsertScanRoot path) — mirrors
 // seedMachine's own reasoning (above): these tests shouldn't need to
 // trust a second package's write path just to set up a fixture.
-func seedScanRoot(t *testing.T, conn *sql.DB, installID, scanRootPath, name string, lastSeenAt time.Time) {
+//
+// story-3/ticket-2: sourceType is now an explicit parameter (was
+// hardcoded 'claude_code') so callers can assert GetUsageScanRoots'
+// wire response carries source_type through correctly, including a
+// non-default value.
+func seedScanRoot(t *testing.T, conn *sql.DB, installID, scanRootPath, name, sourceType string, lastSeenAt time.Time) {
 	t.Helper()
 	_, err := conn.Exec(
-		`INSERT INTO scan_roots (install_id, scan_root_path, name, source_type, last_seen_at) VALUES (?, ?, ?, 'claude_code', ?)`,
-		installID, scanRootPath, name, lastSeenAt,
+		`INSERT INTO scan_roots (install_id, scan_root_path, name, source_type, last_seen_at) VALUES (?, ?, ?, ?, ?)`,
+		installID, scanRootPath, name, sourceType, lastSeenAt,
 	)
 	require.NoError(t, err)
 }
@@ -687,24 +692,28 @@ func TestGetUsageWindows_MissingSession_Unauthorized(t *testing.T) {
 // ticket's own core acceptance test: machines + scan_roots rows seeded
 // across two install_ids, every row comes back with correct hostname
 // joins.
+//
+// story-3/ticket-2: also asserts source_type comes back verbatim — two
+// distinct values seeded (not both "claude_code") so the assertion can't
+// pass by coincidence if source_type were left unmapped/zeroed.
 func TestGetUsageScanRoots_ReturnsEveryRootAcrossTwoInstalls(t *testing.T) {
 	router, session, conn := newBFFRouterForUsage(t)
 	now := time.Now().UTC()
 
 	seedMachine(t, conn, "install-a", "thw-home", now)
 	seedMachine(t, conn, "install-b", "thw-laptop", now)
-	seedScanRoot(t, conn, "install-a", "/home/thw-home/.claude", "main", now)
-	seedScanRoot(t, conn, "install-a", "/home/thw-home/.claude-local", "backup-install", now)
-	seedScanRoot(t, conn, "install-b", "/home/laptop/.claude", "main", now)
+	seedScanRoot(t, conn, "install-a", "/home/thw-home/.claude", "main", "claude_code", now)
+	seedScanRoot(t, conn, "install-a", "/home/thw-home/.claude-local", "backup-install", "codex", now)
+	seedScanRoot(t, conn, "install-b", "/home/laptop/.claude", "main", "claude_code", now)
 
 	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/usage/scan-roots", session, nil)
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 
 	got := decodeUsageScanRootList(t, rec)
 	assert.ElementsMatch(t, []bffapi.UsageScanRoot{
-		{InstallId: "install-a", Hostname: "thw-home", ScanRootPath: "/home/thw-home/.claude", Name: "main"},
-		{InstallId: "install-a", Hostname: "thw-home", ScanRootPath: "/home/thw-home/.claude-local", Name: "backup-install"},
-		{InstallId: "install-b", Hostname: "thw-laptop", ScanRootPath: "/home/laptop/.claude", Name: "main"},
+		{InstallId: "install-a", Hostname: "thw-home", ScanRootPath: "/home/thw-home/.claude", Name: "main", SourceType: "claude_code"},
+		{InstallId: "install-a", Hostname: "thw-home", ScanRootPath: "/home/thw-home/.claude-local", Name: "backup-install", SourceType: "codex"},
+		{InstallId: "install-b", Hostname: "thw-laptop", ScanRootPath: "/home/laptop/.claude", Name: "main", SourceType: "claude_code"},
 	}, got.ScanRoots)
 }
 
@@ -717,7 +726,7 @@ func TestGetUsageScanRoots_NoMachinesRow_FallsBackToInstallID(t *testing.T) {
 	now := time.Now().UTC()
 
 	// Deliberately no seedMachine call for "install-orphan".
-	seedScanRoot(t, conn, "install-orphan", "/home/thw-home/.claude", "main", now)
+	seedScanRoot(t, conn, "install-orphan", "/home/thw-home/.claude", "main", "claude_code", now)
 
 	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/usage/scan-roots", session, nil)
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
@@ -726,6 +735,7 @@ func TestGetUsageScanRoots_NoMachinesRow_FallsBackToInstallID(t *testing.T) {
 	require.Len(t, got.ScanRoots, 1)
 	assert.Equal(t, "install-orphan", got.ScanRoots[0].Hostname, "must fall back to the raw install_id, never a blank hostname")
 	assert.Equal(t, "install-orphan", got.ScanRoots[0].InstallId)
+	assert.Equal(t, "claude_code", got.ScanRoots[0].SourceType)
 }
 
 // TestGetUsageScanRoots_NoScanRoots_EmptyArray proves the zero-registered
@@ -743,6 +753,105 @@ func TestGetUsageScanRoots_NoScanRoots_EmptyArray(t *testing.T) {
 func TestGetUsageScanRoots_MissingSession_Unauthorized(t *testing.T) {
 	router, _, _ := newBFFRouterForUsage(t)
 	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/usage/scan-roots", "", nil)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+func decodeMachineList(t *testing.T, rec *httptest.ResponseRecorder) bffapi.MachineList {
+	t.Helper()
+	var got bffapi.MachineList
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	return got
+}
+
+// --- GET /api/bff/machines (story-3/ticket-1) ---------------------------
+
+// TestGetMachines_ReturnsLifetimeSummaryAcrossMachines_SortedByLastReportedDesc
+// is this ticket's own core acceptance test (contract's Verifiable
+// section): two machines, seeded usage_events across distinct
+// paths/actors/costs, come back with the correct wire shape -- per-machine
+// lifetime_cost/lifetime_tokens/collected_paths/collected_actors -- sorted
+// last_seen_at descending, matching last_seen_at's own "Last reported"
+// semantics (not usage_events' own created_at).
+func TestGetMachines_ReturnsLifetimeSummaryAcrossMachines_SortedByLastReportedDesc(t *testing.T) {
+	router, session, conn := newBFFRouterForUsage(t)
+
+	earlierSeen := time.Date(2026, 9, 12, 8, 0, 0, 0, time.UTC)
+	laterSeen := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+
+	// install-a last reported most recently but is seeded first --
+	// proves ordering comes from last_seen_at, not seed/table order.
+	seedMachine(t, conn, "install-a", "thw-home", laterSeen)
+	seedMachine(t, conn, "install-b", "thw-laptop", earlierSeen)
+
+	// install-a: two events, two distinct paths, two distinct actors.
+	seedUsageEvent(t, conn, "event-a1", "freya", "repo-a", "install-a", 100, 1.0, laterSeen.Add(-time.Hour))
+	seedUsageEvent(t, conn, "event-a2", "nicole", "repo-b", "install-a", 200, 2.5, laterSeen.Add(-30*time.Minute))
+	// install-b: one event, one path, one actor.
+	seedUsageEvent(t, conn, "event-b1", "freya", "repo-c", "install-b", 50, 0.5, earlierSeen.Add(-time.Hour))
+
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/machines", session, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	got := decodeMachineList(t, rec)
+	require.Len(t, got.Machines, 2)
+
+	// last_seen_at DESC: install-a (later) must come first.
+	first := got.Machines[0]
+	assert.Equal(t, "install-a", first.InstallId)
+	assert.Equal(t, "thw-home", first.Hostname)
+	assert.True(t, first.LastSeenAt.Equal(laterSeen))
+	assert.InDelta(t, 3.5, first.LifetimeCost, 0.0001)
+	assert.Equal(t, int64(300), first.LifetimeTokens, "100+200 input tokens, no other token columns seeded")
+	assert.Equal(t, int64(2), first.CollectedPaths)
+	assert.Equal(t, int64(2), first.CollectedActors)
+
+	second := got.Machines[1]
+	assert.Equal(t, "install-b", second.InstallId)
+	assert.Equal(t, "thw-laptop", second.Hostname)
+	assert.True(t, second.LastSeenAt.Equal(earlierSeen))
+	assert.InDelta(t, 0.5, second.LifetimeCost, 0.0001)
+	assert.Equal(t, int64(50), second.LifetimeTokens)
+	assert.Equal(t, int64(1), second.CollectedPaths)
+	assert.Equal(t, int64(1), second.CollectedActors)
+}
+
+// TestGetMachines_MachineWithNoUsageEvents_ZeroedFieldsNotOmitted covers
+// the contract's own explicitly-named defensive edge case end to end
+// through the real HTTP route: a machines row with no matching
+// usage_events rows still comes back as one row with every numeric field
+// zeroed, not omitted from the array or erroring.
+func TestGetMachines_MachineWithNoUsageEvents_ZeroedFieldsNotOmitted(t *testing.T) {
+	router, session, conn := newBFFRouterForUsage(t)
+	seenAt := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+	seedMachine(t, conn, "install-orphan", "thw-orphan", seenAt)
+
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/machines", session, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	got := decodeMachineList(t, rec)
+	require.Len(t, got.Machines, 1)
+	assert.Equal(t, "install-orphan", got.Machines[0].InstallId)
+	assert.Equal(t, float64(0), got.Machines[0].LifetimeCost)
+	assert.Equal(t, int64(0), got.Machines[0].LifetimeTokens)
+	assert.Equal(t, int64(0), got.Machines[0].CollectedPaths)
+	assert.Equal(t, int64(0), got.Machines[0].CollectedActors)
+}
+
+// TestGetMachines_NoMachines_EmptyArray proves the zero-machines case
+// returns an empty array on the wire, not null or an error.
+func TestGetMachines_NoMachines_EmptyArray(t *testing.T) {
+	router, session, _ := newBFFRouterForUsage(t)
+
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/machines", session, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	got := decodeMachineList(t, rec)
+	assert.Empty(t, got.Machines)
+}
+
+func TestGetMachines_MissingSession_Unauthorized(t *testing.T) {
+	router, _, _ := newBFFRouterForUsage(t)
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/machines", "", nil)
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 }
 

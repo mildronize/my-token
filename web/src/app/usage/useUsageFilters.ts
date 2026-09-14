@@ -59,6 +59,16 @@ function readStoredWindow(): UsageWindow {
   return DEFAULT_WINDOW;
 }
 
+// story-3/ticket-4: the "View in Usage dashboard" button's own mechanism
+// (contract's Frontend section) — a small wrapping helper around
+// writeStored, same try/catch-swallow convention as every other write in
+// this file, rather than exporting writeStored itself: MachineDetailPage
+// only ever needs to *set* this one key, never read or clear it, so the
+// narrower helper is the honest seam.
+export function presetMachineFilter(installId: string): void {
+  writeStored(MACHINE_STORAGE_KEY, installId);
+}
+
 export interface UsageFiltersState {
   machine: string | undefined;
   scanRoot: string | undefined;

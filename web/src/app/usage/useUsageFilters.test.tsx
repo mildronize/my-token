@@ -15,7 +15,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 
-import { useUsageFilters } from "./useUsageFilters";
+import { presetMachineFilter, useUsageFilters } from "./useUsageFilters";
 
 describe("useUsageFilters", () => {
   beforeEach(() => {
@@ -90,6 +90,32 @@ describe("useUsageFilters", () => {
 
     expect(result.current.machine).toBeUndefined();
     expect(window.localStorage.getItem("my-token.usage-console.filter.machine")).toBeNull();
+  });
+
+  // story-3/ticket-4: presetMachineFilter is the "View in Usage dashboard"
+  // button's own mechanism — MachineDetailPage never mounts this hook, so
+  // it writes the stored value directly instead. Covered here as the
+  // seam itself; the cross-page contract (a fresh UsagePage mount then
+  // picking the value back up) is MachineDetailPage.test.tsx's own job.
+  it("presetMachineFilter writes the machine key directly, without mounting the hook", () => {
+    presetMachineFilter("install-a");
+
+    expect(window.localStorage.getItem("my-token.usage-console.filter.machine")).toBe("install-a");
+
+    const { result } = renderHook(() => useUsageFilters());
+    expect(result.current.machine).toBe("install-a");
+  });
+
+  it("presetMachineFilter tolerates localStorage being unavailable, same as setMachine", () => {
+    const original = window.localStorage.setItem.bind(window.localStorage);
+    window.localStorage.setItem = () => {
+      throw new DOMException("blocked");
+    };
+    try {
+      expect(() => presetMachineFilter("install-a")).not.toThrow();
+    } finally {
+      window.localStorage.setItem = original;
+    }
   });
 
   it("tolerates localStorage being unavailable (e.g. private browsing) — filter state still works in-memory", () => {

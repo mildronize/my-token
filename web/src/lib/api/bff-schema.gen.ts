@@ -151,6 +151,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/machines": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every machine's lifetime summary, sorted by last reported descending.
+         * @description story-3/ticket-1: the Machines page's own read surface (goal's point 3, a fleet-overview list — deliberately lifetime-scoped, no window/group_by parameter at all, unlike `getUsageSummary` above). Backs both the overview table and the detail page's own identity/stats block (contract's API surface: the detail page finds its one row by `install_id` from this same response rather than a second, single-machine endpoint). Pre-sorted `last_seen_at` descending, matching `ListMachineSummaries`'s own `ORDER BY` — no client-side re-sort needed.
+         */
+        get: operations["getMachines"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -228,7 +248,7 @@ export interface components {
         UsageWindows: {
             windows: components["schemas"]["UsageWindowRow"][];
         };
-        /** @description story-2/ticket-9: one row of GET /usage/scan-roots. Field names are snake_case verbatim from the contract's own API surface section, matching the rest of this usage domain's own break from this spec's otherwise-camelCase convention (see getUsageSummary's own doc comment for why). */
+        /** @description story-2/ticket-9: one row of GET /usage/scan-roots. Field names are snake_case verbatim from the contract's own API surface section, matching the rest of this usage domain's own break from this spec's otherwise-camelCase convention (see getUsageSummary's own doc comment for why). story-3/ticket-2 adds `source_type`, additive to ticket-9's own shape (already a real column on `scan_roots` — story-2/ticket-8 — just never selected/exposed here since ticket-9 only needed this endpoint for the filter dropdown, which doesn't display it); no existing consumer needs to change. */
         UsageScanRoot: {
             /** @description The reporting install's raw install_id — always present, even when hostname had to fall back to it. */
             install_id: string;
@@ -238,10 +258,48 @@ export interface components {
             scan_root_path: string;
             /** @description The operator-assigned label for this scan root (per-install, no shared/global naming registry across machines). */
             name: string;
+            /** @description A declared category at config time (defaults to "claude_code" if the collector's own config omitted it) — same value ingested via the batch's own `scan_roots[]. source_type` (openapi.yaml's `ScanRootInput`), read back verbatim here (story-3/ticket-2). */
+            source_type: string;
         };
         UsageScanRootList: {
             /** @description Every registered scan root across every reporting install. */
             scan_roots: components["schemas"]["UsageScanRoot"][];
+        };
+        /** @description story-3/ticket-1: one row of GET /machines. Named Machine, not MachineSummary, deliberately distinct from the domain-layer usage.MachineSummary it's generated alongside (internal/domain/ usage/repo.go) — same "distinct name per layer" convention ScanRootRecord/ScanRootWithHostname/UsageScanRoot already establish, so a reader/grep is never left guessing which package's type a bare "MachineSummary" means. Field names are snake_case verbatim from the contract's own API surface section, same break from this spec's otherwise-camelCase convention as UsageScanRoot above (this usage domain's own established exception — see getUsageSummary's own doc comment for why). */
+        Machine: {
+            /** @description The reporting install's raw install_id — always present, reachable via a tooltip on the console (goal's point 3). */
+            install_id: string;
+            /** @description machines.hostname for this row's install_id — always present (machines.hostname is NOT NULL; no fallback needed the way UsageScanRoot's own hostname sometimes does). */
+            hostname: string;
+            /**
+             * Format: date-time
+             * @description machines.last_seen_at verbatim — stamped by the server's own clock at ingestion time, deliberately NOT MAX(usage_events.created_at) (contract's Data model: "Last reported" answers "is this machine's collector still alive," a different question from "when did a person last actually use it").
+             */
+            last_seen_at: string;
+            /**
+             * Format: double
+             * @description SUM(usage_events.cost) across every event this machine has ever reported, 0 (not null) when it has none.
+             */
+            lifetime_cost: number;
+            /**
+             * Format: int64
+             * @description SUM of all four token columns (input + output + cache_read + cache_creation) across every event this machine has ever reported, 0 (not null) when it has none.
+             */
+            lifetime_tokens: number;
+            /**
+             * Format: int64
+             * @description COUNT(DISTINCT usage_events.path) this machine has reported — "Collected Paths" on the console, a plain count, not an inference (goal's point 3).
+             */
+            collected_paths: number;
+            /**
+             * Format: int64
+             * @description COUNT(DISTINCT usage_events.actor) this machine has reported — "Collected Actors" on the console, same "plain count" naming as collected_paths.
+             */
+            collected_actors: number;
+        };
+        MachineList: {
+            /** @description Every machine's lifetime summary, sorted last_seen_at descending. */
+            machines: components["schemas"]["Machine"][];
         };
         Error: {
             error: {
@@ -443,6 +501,27 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UsageScanRootList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    getMachines: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every machine's lifetime summary, most recently reported first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MachineList"];
                 };
             };
             401: components["responses"]["Unauthorized"];

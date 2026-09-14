@@ -49,6 +49,26 @@ type Querier interface {
 	// (ListAllAgentAPIKeysRow) is scoped to this one query only; every other
 	// query in this file keeps returning bare db.ApiKey, unaffected.
 	ListAllAgentAPIKeys(ctx context.Context) ([]ListAllAgentAPIKeysRow, error)
+	// story-3/ticket-1: every machines row's lifetime summary -- backs
+	// GET /api/bff/machines (contract's Data model, copied verbatim from
+	// there). Unlike ListMachines/ListScanRoots above (a bare label lookup,
+	// joined against usage_events in Go), this query does its own
+	// aggregation and hostname pairing entirely in SQL: there is no existing
+	// pure Go aggregation function (summary.go's Aggregate) this could reuse
+	// instead, since Aggregate is window-scoped and this is deliberately
+	// lifetime-scoped with no window argument at all -- a single round trip
+	// is simpler than fetching every usage_events row ever written just to
+	// sum it in Go.
+	//
+	// LEFT JOIN + COALESCE are defensive, not load-bearing: a machines row is
+	// only ever created alongside at least one usage_events row today (the
+	// collector's own early-return on zero events, internal/collector/
+	// collector.go), but this guarantees a machine with no matching
+	// usage_events rows still comes back as one zeroed row rather than being
+	// silently dropped or erroring, if that ever stops being true. Ordered
+	// last_seen_at DESC -- "Last reported" descending, already the order the
+	// console page needs, no client-side re-sort required.
+	ListMachineSummaries(ctx context.Context) ([]ListMachineSummariesRow, error)
 	// Every known machine's install_id -> hostname mapping -- the "By
 	// machine" breakdown's own label lookup (internal/domain/usage/
 	// service.go's Summary, when group_by=machine substitutes each
@@ -71,6 +91,10 @@ type Querier interface {
 	// as a SQL JOIN here -- same reasoning ListMachines' own doc comment
 	// gives: reuse the pure aggregation/substitution logic that already
 	// exists rather than re-deriving a join in SQL.
+	//
+	// story-3/ticket-2: also selects source_type -- already a real column
+	// (story-2/ticket-8), just never selected here since ticket-9 only
+	// needed this query for the filter dropdown, which doesn't display it.
 	ListScanRoots(ctx context.Context) ([]ListScanRootsRow, error)
 	// story-1/ticket-14: every event whose created_at falls between the two
 	// bound parameters below, range_start inclusive, range_end exclusive.

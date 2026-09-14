@@ -23,6 +23,8 @@ import {
 
 const NAV_LINKS: ReadonlyArray<{ href: string; label: string }> = [
   { href: "/usage", label: "Usage" },
+  // story-3/ticket-3: the Machines overview page (goal point 1).
+  { href: "/machines", label: "Machines" },
 ];
 
 /** Return up to two uppercase initials from a display name. */

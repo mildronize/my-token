@@ -11,6 +11,21 @@ export function formatInt(n: number): string {
   return Math.round(n).toLocaleString();
 }
 
+// story-3/ticket-3: the Machines page's "Last reported" column
+// (machines.last_seen_at) answers "is this machine's collector still
+// alive" (contract's Data model) — date alone (ApiKeySettings.tsx's own
+// formatDate) would hide same-day staleness, so this includes the time.
+/** An ISO timestamp -> `"Sep 13, 2026, 1:31 PM"` in the viewer's own locale/timezone. */
+export function formatDateTime(value: string): string {
+  return new Date(value).toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 /**
  * `1234567` -> `"1.23M"`, `8900` -> `"8.9K"`, `120` -> `"120"` — the
  * compact form used in tile subtexts and breakdown panels, where a raw

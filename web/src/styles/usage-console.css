@@ -338,6 +338,13 @@
   background: var(--uc-surface-raised);
 }
 
+/* story-3/ticket-3: MachinesPage's own row-click-to-detail rows — styled
+   here (rather than an inline style) so cursor affordance lives with the
+   rest of this stylesheet's table styling. */
+.usage-console tbody tr.clickable-row {
+  cursor: pointer;
+}
+
 .usage-console td.num,
 .usage-console th.num {
   font-family: var(--uc-mono);
@@ -459,4 +466,66 @@
   color: var(--uc-text-faint);
   font-style: italic;
   padding: 12px 0;
+}
+
+/* ---------- machine detail page (story-3/ticket-4) ---------- */
+/* Back-to-list link sitting in the topbar's own .meta cluster, sized to
+   match the pill/select/button set already there rather than inheriting
+   globals.css's larger default link size. */
+.usage-console .topbar .meta a {
+  font-size: 12px;
+  text-decoration: none;
+}
+.usage-console .topbar .meta a:hover {
+  text-decoration: underline;
+}
+
+/* Scan roots, laid out as its own card list (goal point 5: "not cramped
+   into a table cell" — a machine can have several, each with its own
+   name/path/source type, none of which reads well as a table row). */
+.usage-console .scanroots-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--uc-border);
+  border: 1px solid var(--uc-border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.usage-console .scanroot-card {
+  background: var(--uc-surface);
+  padding: 14px 18px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.usage-console .scanroot-card-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.usage-console .scanroot-card-name {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.usage-console .scanroot-card-path {
+  font-size: 12px;
+  color: var(--uc-text-dim);
+  overflow-wrap: anywhere;
+}
+
+.usage-console .scanroot-card-type {
+  font-size: 11px;
+  color: var(--uc-accent-strong);
+  background: var(--uc-accent-fill-dim);
+  border-radius: 100px;
+  padding: 3px 10px;
+  white-space: nowrap;
 }
